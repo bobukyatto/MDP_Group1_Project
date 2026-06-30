@@ -7,18 +7,26 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
+    <TextView
+        android:id="@+id/tvString"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="32dp"
+        android:layout_marginTop="32dp"
+        android:text="Device List"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <ListView
         android:id="@+id/lvBluetoothDevices"
-        android:layout_width="813dp"
-        android:layout_height="636dp"
-        android:layout_marginTop="24dp"
-        app:layout_constraintStart_toStartOf="parent">
+        android:layout_width="776dp"
+        android:layout_height="1216dp"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="32dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/tvString">
 
-        <TextView
-            android:id="@+id/tvString"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Device List" />
+
     </ListView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
