@@ -243,6 +243,13 @@
             android:text="Status: Disconnected"
             android:textColor="?android:attr/textColorPrimary" />
 
+        <TextView
+            android:id="@+id/tvReceive"
+            android:layout_width="match_parent"
+            android:layout_marginTop="32dp"
+            android:gravity="center"
+            android:layout_height="41dp" />
+
     </LinearLayout>
 
 </androidx.core.widget.NestedScrollView>

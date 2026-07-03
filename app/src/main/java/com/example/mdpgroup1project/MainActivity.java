@@ -33,6 +33,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -49,6 +50,7 @@ public class MainActivity extends AppCompatActivity {
     private BluetoothAdapter bluetoothAdapter;
     private BluetoothSocket bluetoothSocket;
     private OutputStream outputStream;
+    private InputStream inputStream;
 
     private final List<BluetoothDevice> availableDevices = new ArrayList<>();
     private final List<String> availableDevicesNames = new ArrayList<>();
@@ -59,6 +61,7 @@ public class MainActivity extends AppCompatActivity {
     private ArrayAdapter<String> pairedAdapter;
 
     private TextView tvStatus;
+    private TextView tvReceive;
     private GridLayout mapGrid;
     private RadioGroup rgSelectionMode;
     private final ImageView[][] gridCells = new ImageView[20][20];
@@ -91,6 +94,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize UI
         tvStatus = findViewById(R.id.tvStatus);
+        tvReceive = findViewById(R.id.tvReceive);
         ListView lvAvailable = findViewById(R.id.lvBluetoothDevices);
         ListView lvPaired = findViewById(R.id.lvPairedDevices);
         Button btnScan = findViewById(R.id.btnScan);
@@ -117,6 +121,7 @@ public class MainActivity extends AppCompatActivity {
         BluetoothManager bluetoothManager = getSystemService(BluetoothManager.class);
         bluetoothAdapter = bluetoothManager.getAdapter();
 
+        // Check if bluetooth is available on current device
         if (bluetoothAdapter == null) {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
             finish();
@@ -136,7 +141,10 @@ public class MainActivity extends AppCompatActivity {
         btnScan.setOnClickListener(v -> startDiscovery());
         btnSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
 
+        // When item in available devices list is tapped, connect to it.
         lvAvailable.setOnItemClickListener((parent, view, position, id) -> availableDevices.get(position).createBond());
+
+        // When item in paired devices list is tapped, connect to it.
         lvPaired.setOnItemClickListener((parent, view, position, id) -> connectToDevice(pairedDevicesList.get(position)));
 
         btnResetGrid.setOnClickListener(v -> resetGrid());
@@ -164,18 +172,34 @@ public class MainActivity extends AppCompatActivity {
             long now = System.currentTimeMillis();
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
-                    if (type.equals("f")) { isForward = true; fwdStart = now; }
-                    else if (type.equals("b")) { isBackward = true; bwdStart = now; }
-                    else if (type.equals("l")) { isLeft = true; leftStart = now; }
-                    else if (type.equals("r")) { isRight = true; rightStart = now; }
+                    switch (type) {
+                        case "f" -> {
+                            isForward = true;
+                            fwdStart = now;
+                        }
+                        case "b" -> {
+                            isBackward = true;
+                            bwdStart = now;
+                        }
+                        case "l" -> {
+                            isLeft = true;
+                            leftStart = now;
+                        }
+                        case "r" -> {
+                            isRight = true;
+                            rightStart = now;
+                        }
+                    }
                     v.setPressed(true);
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    if (type.equals("f")) isForward = false;
-                    else if (type.equals("b")) isBackward = false;
-                    else if (type.equals("l")) isLeft = false;
-                    else if (type.equals("r")) isRight = false;
+                    switch (type) {
+                        case "f" -> isForward = false;
+                        case "b" -> isBackward = false;
+                        case "l" -> isLeft = false;
+                        case "r" -> isRight = false;
+                    }
                     v.setPressed(false);
                     return true;
             }
@@ -369,7 +393,19 @@ public class MainActivity extends AppCompatActivity {
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
                 bluetoothSocket.connect();
                 outputStream = bluetoothSocket.getOutputStream();
-                
+
+                //receive data
+                inputStream = bluetoothSocket.getInputStream();
+                var buffer = new byte[1024];
+                var bytesRead = inputStream.read(buffer);
+                String inputString = new String(buffer, 0, bytesRead);
+
+                if(!inputString.isEmpty()){
+                    tvReceive.setText(inputString);
+                    inputStream.reset();
+                }
+
+
                 runOnUiThread(() -> {
                     tvStatus.setText("Status: Connected to " + device.getName());
                     tvStatus.setTextColor(Color.GREEN);
@@ -404,6 +440,7 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    // Sends command to connected bluetooth device
     private void sendCommand(String command) {
         if (outputStream == null) return;
         try {
@@ -414,6 +451,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // Receiver for Bluetooth events
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @SuppressLint("MissingPermission")
         public void onReceive(Context context, Intent intent) {
@@ -437,7 +475,25 @@ public class MainActivity extends AppCompatActivity {
                 if (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_BONDED) updatePairedDevices();
             } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
                 handleDisconnect();
+            } else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+                final int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
+                switch(state) {
+                    case BluetoothAdapter.STATE_OFF:
+
+                        break;
+                    case BluetoothAdapter.STATE_TURNING_OFF:
+
+                        break;
+                    case BluetoothAdapter.STATE_ON:
+
+                        break;
+                    case BluetoothAdapter.STATE_TURNING_ON:
+
+                        break;
+                }
+
             }
+
         }
     };
 
