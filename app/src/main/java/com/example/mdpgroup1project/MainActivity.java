@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -15,6 +16,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.DragEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,7 +26,6 @@ import android.widget.EditText;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.ListView;
-import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -70,11 +71,12 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvStatus;
     
     // Persistent Map State
-    private final String[][] mapData = new String[20][20]; // Stores "START", "OBSTACLE", "TARGET"
+    private final String[][] mapData = new String[20][20]; // Stores "START", "OBSTACLE"
     private final float[][] mapRotation = new float[20][20];
+    private final boolean[][] hasFace = new boolean[20][20];
     private final Map<String, Long> lastClickTimeMap = new HashMap<>();
 
-    private int targetCount = 0;
+    private int obstacleCount = 0;
     private int currentX = 0;
     private int currentZ = 0;
     private int lastSentX = -9999;
@@ -219,11 +221,25 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupMapTab(View v) {
         GridLayout mapGrid = v.findViewById(R.id.mapGrid);
-        RadioGroup rgMode = v.findViewById(R.id.rgSelectionMode);
         MaterialSwitch swReverse = v.findViewById(R.id.swAllowReverse);
+        ImageView imgDragRobot = v.findViewById(R.id.imgDragRobot);
+        ImageView imgDragObstacle = v.findViewById(R.id.imgDragObstacle);
+
         v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid(mapGrid));
         v.findViewById(R.id.btnSimulate).setOnClickListener(view -> sendCommand(constructMapMessage(true, swReverse.isChecked())));
         v.findViewById(R.id.btnGo).setOnClickListener(view -> sendCommand(constructMapMessage(false, swReverse.isChecked())));
+
+        imgDragRobot.setOnLongClickListener(view -> {
+            ClipData data = ClipData.newPlainText("type", "START");
+            view.startDragAndDrop(data, new View.DragShadowBuilder(view), null, 0);
+            return true;
+        });
+
+        imgDragObstacle.setOnLongClickListener(view -> {
+            ClipData data = ClipData.newPlainText("type", "OBSTACLE");
+            view.startDragAndDrop(data, new View.DragShadowBuilder(view), null, 0);
+            return true;
+        });
 
         mapGrid.post(() -> {
             int cellSize = mapGrid.getWidth() / 20;
@@ -238,54 +254,86 @@ public class MainActivity extends AppCompatActivity {
                     cell.setBackgroundColor(Color.LTGRAY);
                     cell.setScaleType(ImageView.ScaleType.FIT_CENTER);
                     
-                    // Restore visual state from persistent mapData
-                    String type = mapData[r][c];
-                    if (type != null) {
-                        if ("START".equals(type)) cell.setImageResource(R.drawable.ic_car);
-                        else if ("OBSTACLE".equals(type)) cell.setImageResource(R.drawable.ic_obstacle);
-                        else if ("TARGET".equals(type)) cell.setImageResource(R.drawable.ic_target);
-                        cell.setRotation(mapRotation[r][c]);
-                    }
-
                     final int row = r; final int col = c;
-                    cell.setOnClickListener(view -> handleCellInteraction(cell, row, col, rgMode));
+                    refreshCellUI(cell, row, col);
+
+                    cell.setOnClickListener(view -> handleCellTap(cell, row, col));
+                    cell.setOnDragListener((view, event) -> {
+                        if (event.getAction() == DragEvent.ACTION_DROP) {
+                            String type = event.getClipData().getItemAt(0).getText().toString();
+                            placeAt(cell, row, col, type);
+                            return true;
+                        }
+                        return true;
+                    });
                     mapGrid.addView(cell);
                 }
             }
         });
     }
 
-    private void handleCellInteraction(ImageView cell, int r, int c, RadioGroup rgMode) {
+    private void placeAt(ImageView cell, int r, int c, String type) {
+        if ("START".equals(type)) {
+            clearPreviousStart();
+            mapData[r][c] = "START";
+            mapRotation[r][c] = 0;
+            hasFace[r][c] = true;
+        } else if ("OBSTACLE".equals(type)) {
+            if (mapData[r][c] == null) {
+                if (obstacleCount < 6) {
+                    mapData[r][c] = "OBSTACLE";
+                    mapRotation[r][c] = 0;
+                    hasFace[r][c] = false;
+                    obstacleCount++;
+                } else {
+                    Toast.makeText(this, "Max 6 obstacles reached", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
+        refreshCellUI(cell, r, c);
+    }
+
+    private void handleCellTap(ImageView cell, int r, int c) {
         long now = System.currentTimeMillis();
         String key = r + "," + c;
         long last = lastClickTimeMap.getOrDefault(key, 0L);
         lastClickTimeMap.put(key, now);
 
-        if (now - last < 300) { // Double Tap
-            if ("TARGET".equals(mapData[r][c])) targetCount--;
-            mapData[r][c] = null; mapRotation[r][c] = 0;
+        if (now - last < 300) { // Double Tap to Remove
+            if ("OBSTACLE".equals(mapData[r][c])) obstacleCount--;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
             cell.setImageDrawable(null); cell.setRotation(0);
             return;
         }
 
-        int id = rgMode.getCheckedRadioButtonId();
-        if (mapData[r][c] != null && id != R.id.rbTarget) {
-            mapRotation[r][c] = (mapRotation[r][c] + 90) % 360;
-            cell.setRotation(mapRotation[r][c]);
-            return;
-        }
-        if (mapData[r][c] != null) return;
+        if (mapData[r][c] == null) return;
 
-        if (id == R.id.rbObstacle) {
-            cell.setImageResource(R.drawable.ic_obstacle); mapData[r][c] = "OBSTACLE";
-        } else if (id == R.id.rbVehicle) {
-            clearPreviousStart(); 
-            cell.setImageResource(R.drawable.ic_car); mapData[r][c] = "START";
-        } else if (id == R.id.rbTarget) {
-            if (targetCount < 6) {
-                cell.setImageResource(R.drawable.ic_target); mapData[r][c] = "TARGET"; targetCount++;
-            } else Toast.makeText(this, "Max 6 targets", Toast.LENGTH_SHORT).show();
+        if ("OBSTACLE".equals(mapData[r][c])) {
+            if (!hasFace[r][c]) {
+                hasFace[r][c] = true;
+                mapRotation[r][c] = 0;
+            } else {
+                mapRotation[r][c] = (mapRotation[r][c] + 90) % 360;
+                // If back to 0 after full cycle, maybe back to no face?
+                // Request said "select no face on first tap and n,s,e,w on subsequent tabs"
+                // So: Drag -> No Face. Tap -> N. Tap -> E. Tap -> S. Tap -> W. Tap -> No Face.
+                if (mapRotation[r][c] == 0) hasFace[r][c] = false;
+            }
+        } else if ("START".equals(mapData[r][c])) {
+            mapRotation[r][c] = (mapRotation[r][c] + 90) % 360;
         }
+        refreshCellUI(cell, r, c);
+    }
+
+    private void refreshCellUI(ImageView cell, int r, int c) {
+        String type = mapData[r][c];
+        if (type == null) { cell.setImageDrawable(null); cell.setRotation(0); return; }
+        if ("START".equals(type)) cell.setImageResource(R.drawable.ic_car);
+        else if ("OBSTACLE".equals(type)) {
+            if (hasFace[r][c]) cell.setImageResource(R.drawable.ic_obstacle);
+            else cell.setImageResource(R.drawable.ic_obstacle_no_face);
+        }
+        cell.setRotation(mapRotation[r][c]);
     }
 
     private void clearPreviousStart() {
@@ -295,11 +343,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void resetGrid(GridLayout grid) {
         for (int r = 0; r < 20; r++) for (int c = 0; c < 20; c++) {
-            mapData[r][c] = null; mapRotation[r][c] = 0;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
             ImageView v = (ImageView) grid.getChildAt(r * 20 + c);
             if(v != null) { v.setImageDrawable(null); v.setRotation(0); }
         }
-        targetCount = 0; lastClickTimeMap.clear();
+        obstacleCount = 0; lastClickTimeMap.clear();
     }
 
     private String constructMapMessage(boolean isSim, boolean allowReverse) {
@@ -309,7 +357,14 @@ public class MainActivity extends AppCompatActivity {
         for (int r = 0; r < 20; r++) {
             for (int c = 0; c < 20; c++) {
                 if ("START".equals(mapData[r][c])) startStr = "START:" + c + "," + (19 - r) + "," + getFacing(mapRotation[r][c]);
-                else if ("OBSTACLE".equals(mapData[r][c])) obsStrs.add("OBS:" + c + "," + (19 - r) + "," + getFacing(mapRotation[r][c]));
+                else if ("OBSTACLE".equals(mapData[r][c])) {
+                    // Protocol needs a face. If "No Face" is selected, we send 'N' or skip?
+                    // User said "image that requires my camera to detect". 
+                    // I will skip obstacles with no face in the message if they don't need detection.
+                    if (hasFace[r][c]) {
+                        obsStrs.add("OBS:" + c + "," + (19 - r) + "," + getFacing(mapRotation[r][c]));
+                    }
+                }
             }
         }
         if (startStr.isEmpty()) return "ERR:No Start Location";
@@ -340,29 +395,23 @@ public class MainActivity extends AppCompatActivity {
             left.setLabel("VELOCITY (X)"); left.setMode(true, false);
             left.setListener(new JoystickView.JoystickListener() {
                 @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
-                @Override public void onReleased() { 
-                    currentX = 0; 
-                    currentZ = 0; // Reset steering when car stops moving
-                }
+                @Override public void onReleased() { currentX = 0; currentZ = 0; }
             });
             right.setLabel("STEERING (Z)"); right.setMode(false, true);
             right.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); } // Negated for Positive=Left
-                @Override public void onReleased() { currentZ = 0; } // Auto-center steering
+                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
+                @Override public void onReleased() { currentZ = 0; }
             });
         } else {
             left.setLabel("STEERING (Z)"); left.setMode(false, true);
             left.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); } // Negated for Positive=Left
+                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
                 @Override public void onReleased() { currentZ = 0; }
             });
             right.setLabel("VELOCITY (X)"); right.setMode(true, false);
             right.setListener(new JoystickView.JoystickListener() {
                 @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
-                @Override public void onReleased() { 
-                    currentX = 0; 
-                    currentZ = 0; 
-                }
+                @Override public void onReleased() { currentX = 0; currentZ = 0; }
             });
         }
     }
@@ -443,8 +492,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendCommand(String command) {
-        if (outputStream == null) return;
-        try { outputStream.write(command.getBytes()); Log.d(TAG, "Sent: " + command.trim()); }
+        if (outputStream == null) {
+            Log.w(TAG, "Cannot send command: outputStream is null");
+            return;
+        }
+        try { 
+            outputStream.write(command.getBytes()); 
+            Log.d(TAG, "Sent: " + command.trim());
+        }
         catch (IOException e) { Log.e(TAG, "Error sending", e); handleDisconnect(); }
     }
 
