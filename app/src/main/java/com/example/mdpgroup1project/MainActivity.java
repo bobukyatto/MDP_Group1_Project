@@ -13,10 +13,10 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Message;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.MotionEvent;
-import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.GridLayout;
@@ -35,6 +35,7 @@ import androidx.core.view.WindowInsetsCompat;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -48,10 +49,7 @@ public class MainActivity extends AppCompatActivity {
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
     private BluetoothAdapter bluetoothAdapter;
-    private BluetoothSocket bluetoothSocket;
-    private OutputStream outputStream;
-    private InputStream inputStream;
-
+    private BluetoothConnectionService mBluetoothConnection;
     private final List<BluetoothDevice> availableDevices = new ArrayList<>();
     private final List<String> availableDevicesNames = new ArrayList<>();
     private ArrayAdapter<String> availableAdapter;
@@ -76,9 +74,18 @@ public class MainActivity extends AppCompatActivity {
     private boolean isForward = false, isBackward = false, isLeft = false, isRight = false;
     private long fwdStart = 0, bwdStart = 0, leftStart = 0, rightStart = 0;
     
-    private final Handler commandHandler = new Handler(Looper.getMainLooper());
-    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
-    private static final int WATCHDOG_INTERVAL = 2000;
+    private final Handler commandHandler = new Handler(Looper.getMainLooper()){
+        public void handleMessage(Message msg) {
+            String message = (String) msg.obj;
+            tvReceive = findViewById(R.id.tvReceive);
+            tvReceive.setText(message);
+            Log.i(TAG, "InputStream received message:" +message);
+//            setContentView(tvReceive);
+
+        }
+    };
+//    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+//    private static final int WATCHDOG_INTERVAL = 2000;
 
     @SuppressLint("MissingPermission")
     @Override
@@ -112,6 +119,9 @@ public class MainActivity extends AppCompatActivity {
 
         setupGrid();
 
+        // Bluetooth setup
+        mBluetoothConnection = new BluetoothConnectionService(MainActivity.this, commandHandler);
+
         availableAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, availableDevicesNames);
         lvAvailable.setAdapter(availableAdapter);
 
@@ -121,11 +131,14 @@ public class MainActivity extends AppCompatActivity {
         BluetoothManager bluetoothManager = getSystemService(BluetoothManager.class);
         bluetoothAdapter = bluetoothManager.getAdapter();
 
-        // Check if bluetooth is available on current device
+        // Check if bluetooth is available on current device. If yes and not enabled, ask to enable.
         if (bluetoothAdapter == null) {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
-            finish();
+//            finish();
             return;
+        }else if (!bluetoothAdapter.isEnabled()){
+            Intent enableBTIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivity(enableBTIntent);
         }
 
         updatePairedDevices();
@@ -136,7 +149,7 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
         filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-        registerReceiver(receiver, filter);
+        registerReceiver(bluetoothReceiver, filter);
 
         btnScan.setOnClickListener(v -> startDiscovery());
         btnSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
@@ -163,7 +176,7 @@ public class MainActivity extends AppCompatActivity {
         btnAuto.setOnClickListener(v -> sendCommand("auto\n"));
         btnStart.setOnClickListener(v -> sendCommand("start\n"));
 
-        commandHandler.post(commandRunnable);
+//        commandHandler.post(commandRunnable);
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -176,18 +189,23 @@ public class MainActivity extends AppCompatActivity {
                         case "f" -> {
                             isForward = true;
                             fwdStart = now;
+                            sendCommand("f");
+                            Log.i(TAG, "Bluetooth forward");
                         }
                         case "b" -> {
                             isBackward = true;
                             bwdStart = now;
+                            sendCommand("b");
                         }
                         case "l" -> {
                             isLeft = true;
                             leftStart = now;
+                            sendCommand("l");
                         }
                         case "r" -> {
                             isRight = true;
                             rightStart = now;
+                            sendCommand("r");
                         }
                     }
                     v.setPressed(true);
@@ -207,65 +225,40 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private final Runnable commandRunnable = new Runnable() {
-        @Override
-        public void run() {
-            long now = System.currentTimeMillis();
-            
-            if (isForward) {
-                int accel = (int)((now - fwdStart) / 150) * 15;
-                currentX = Math.min(1000, currentX + 50 + accel);
-            } else if (isBackward) {
-                int accel = (int)((now - bwdStart) / 150) * 15;
-                currentX = Math.max(-1000, currentX - 50 - accel);
-            } else {
-                currentX = 0;
-            }
+    // Moves the robot
+//    private final Runnable commandRunnable = new Runnable() {
+//        @Override
+//        public void run() {
+//            long now = System.currentTimeMillis();
+//
+//            if (isForward) {
+//                int accel = (int)((now - fwdStart) / 150) * 15;
+//                currentX = Math.min(1000, currentX + 50 + accel);
+//            } else if (isBackward) {
+//                int accel = (int)((now - bwdStart) / 150) * 15;
+//                currentX = Math.max(-1000, currentX - 50 - accel);
+//            } else {
+//                currentX = 0;
+//            }
+//
+//            if (isLeft) {
+//                int accel = (int)((now - leftStart) / 150) * 15;
+//                currentZ = Math.min(1000, currentZ + 50 + accel);
+//            } else if (isRight) {
+//                int accel = (int)((now - rightStart) / 150) * 15;
+//                currentZ = Math.max(-1000, currentZ - 50 - accel);
+//            }
+//
+//            if (currentX != lastSentX || currentZ != lastSentZ) {
+//                sendCommand(currentX + "," + currentZ + "\n");
+//                lastSentX = currentX;
+//                lastSentZ = currentZ;
+//            }
+//
+//            commandHandler.postDelayed(this, 50);
+//        }
+//    };
 
-            if (isLeft) {
-                int accel = (int)((now - leftStart) / 150) * 15;
-                currentZ = Math.min(1000, currentZ + 50 + accel);
-            } else if (isRight) {
-                int accel = (int)((now - rightStart) / 150) * 15;
-                currentZ = Math.max(-1000, currentZ - 50 - accel);
-            }
-
-            if (currentX != lastSentX || currentZ != lastSentZ) {
-                sendCommand(currentX + "," + currentZ + "\n");
-                lastSentX = currentX;
-                lastSentZ = currentZ;
-            }
-            
-            commandHandler.postDelayed(this, 50);
-        }
-    };
-
-    private final Runnable watchdogRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (bluetoothSocket != null) {
-                if (!bluetoothSocket.isConnected()) {
-                    handleDisconnect();
-                } else {
-                    // Send a "keep-alive" ping to check if the link is truly active
-                    // The RPi should ignore empty lines or single newlines
-                    sendCommand("\n");
-                    watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
-                }
-            }
-        }
-    };
-
-    private void handleDisconnect() {
-        watchdogHandler.removeCallbacks(watchdogRunnable);
-        try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
-        bluetoothSocket = null;
-        outputStream = null;
-        runOnUiThread(() -> {
-            tvStatus.setText("Status: Disconnected");
-            tvStatus.setTextColor(Color.RED);
-        });
-    }
 
     private void setupGrid() {
         mapGrid.post(() -> {
@@ -320,7 +313,10 @@ public class MainActivity extends AppCompatActivity {
             cell.setTag("OBSTACLE");
         } else if (checkedId == R.id.rbVehicle) {
             clearTag("START");
-            cell.setImageResource(R.drawable.ic_car);
+            cell.setImageResource(R.drawable.robot);
+            cell.setOnClickListener(l -> {
+                //TODO: rotate?
+            });
             cell.setTag("START");
         } else if (checkedId == R.id.rbTarget) {
             if (targetCount < 6) {
@@ -379,80 +375,35 @@ public class MainActivity extends AppCompatActivity {
 
     @SuppressLint("MissingPermission")
     private void connectToDevice(BluetoothDevice device) {
-        new Thread(() -> {
-            try {
-                if (bluetoothSocket != null) {
-                    try { bluetoothSocket.close(); } catch (IOException ignored) {}
-                }
-                
-                // Cancel discovery before connecting is mandatory
-                bluetoothAdapter.cancelDiscovery();
-                // Add a tiny delay to allow the adapter to settle
-                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        // Cancel discovery before connecting is mandatory
+        bluetoothAdapter.cancelDiscovery();
+        // Add a tiny delay to allow the adapter to settle
+        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
 
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                bluetoothSocket.connect();
-                outputStream = bluetoothSocket.getOutputStream();
+        mBluetoothConnection.startClient(device, SPP_UUID);
+        runOnUiThread(() -> {
+            tvStatus.setText("Status: Connected to " + device.getName());
+            tvStatus.setTextColor(Color.GREEN);
+            Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
+        });
 
-                //receive data
-                inputStream = bluetoothSocket.getInputStream();
-                var buffer = new byte[1024];
-                var bytesRead = inputStream.read(buffer);
-                String inputString = new String(buffer, 0, bytesRead);
-
-                if(!inputString.isEmpty()){
-                    tvReceive.setText(inputString);
-                    inputStream.reset();
-                }
-
-
-                runOnUiThread(() -> {
-                    tvStatus.setText("Status: Connected to " + device.getName());
-                    tvStatus.setTextColor(Color.GREEN);
-                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
-                    
-                    watchdogHandler.removeCallbacks(watchdogRunnable);
-                    watchdogHandler.post(watchdogRunnable);
-                });
-            } catch (IOException e) {
-                Log.e(TAG, "Connection failed", e);
-                // Try fallback connection if standard fails
-                try {
-                    bluetoothSocket = (BluetoothSocket) device.getClass()
-                            .getMethod("createRfcommSocket", new Class[]{int.class})
-                            .invoke(device, 1);
-                    bluetoothSocket.connect();
-                    outputStream = bluetoothSocket.getOutputStream();
-                    runOnUiThread(() -> {
-                        tvStatus.setText("Status: Connected (Alt) to " + device.getName());
-                        tvStatus.setTextColor(Color.GREEN);
-                        watchdogHandler.removeCallbacks(watchdogRunnable);
-                        watchdogHandler.post(watchdogRunnable);
-                    });
-                } catch (Exception e2) {
-                    handleDisconnect();
-                    runOnUiThread(() -> {
-                        tvStatus.setText("Status: Connection Failed");
-                        tvStatus.setTextColor(Color.RED);
-                    });
-                }
-            }
-        }).start();
     }
 
     // Sends command to connected bluetooth device
     private void sendCommand(String command) {
-        if (outputStream == null) return;
-        try {
-            outputStream.write(command.getBytes());
-        } catch (IOException e) {
-            Log.e(TAG, "Error sending", e);
-            handleDisconnect();
+        try{
+            byte[] bytes = command.getBytes(Charset.defaultCharset());
+            mBluetoothConnection.write(bytes);
+            Log.i(TAG, "success sendCommand: "+command);
+        } catch (Exception e) {
+            Log.e(TAG, "sendCommand"+e.toString());
+//            throw new RuntimeException(e);
         }
+
     }
 
     // Receiver for Bluetooth events
-    private final BroadcastReceiver receiver = new BroadcastReceiver() {
+    private final BroadcastReceiver bluetoothReceiver = new BroadcastReceiver() {
         @SuppressLint("MissingPermission")
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -467,14 +418,13 @@ public class MainActivity extends AppCompatActivity {
                 tvStatus.setText("Status: Scanning...");
                 tvStatus.setTextColor(Color.GRAY);
             } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
-                if (bluetoothSocket == null || !bluetoothSocket.isConnected()) {
-                    tvStatus.setText("Status: Disconnected");
-                    tvStatus.setTextColor(Color.RED);
-                }
+//                if (bluetoothSocket == null || !bluetoothSocket.isConnected()) {
+//                    tvStatus.setText("Status: Disconnected");
+//                    tvStatus.setTextColor(Color.RED);
+//                }
             } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
                 if (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_BONDED) updatePairedDevices();
             } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
-                handleDisconnect();
             } else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
                 final int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 switch(state) {
@@ -500,7 +450,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(receiver);
-        try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
+        unregisterReceiver(bluetoothReceiver);
+
     }
 }
