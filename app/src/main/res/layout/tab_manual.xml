@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="16dp">
+
+    <!-- Left Side: 4 Direction Buttons -->
+    <GridLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:columnCount="3"
+        android:layout_gravity="center_vertical">
+
+        <!-- Row 1 -->
+        <View android:layout_width="100dp" android:layout_height="100dp" />
+        <Button
+            android:id="@+id/btnForward"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:text="↑"
+            android:layout_margin="8dp"/>
+        <View android:layout_width="100dp" android:layout_height="100dp" />
+
+        <!-- Row 2 -->
+        <Button
+            android:id="@+id/btnLeft"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:text="←"
+            android:layout_margin="8dp"/>
+        <View android:layout_width="100dp" android:layout_height="100dp" />
+        <Button
+            android:id="@+id/btnRight"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:text="→"
+            android:layout_margin="8dp"/>
+
+        <!-- Row 3 -->
+        <View android:layout_width="100dp" android:layout_height="100dp" />
+        <Button
+            android:id="@+id/btnBackward"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:text="↓"
+            android:layout_margin="8dp"/>
+        <View android:layout_width="100dp" android:layout_height="100dp" />
+
+    </GridLayout>
+
+    <!-- Right Side: Automatic and Start Buttons -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:orientation="vertical"
+        android:layout_marginStart="32dp">
+
+        <Button
+            android:id="@+id/btnManualAuto"
+            android:layout_width="150dp"
+            android:layout_height="100dp"
+            android:text="AUTOMATIC" />
+
+        <Button
+            android:id="@+id/btnManualStart"
+            android:layout_width="150dp"
+            android:layout_height="100dp"
+            android:layout_marginTop="32dp"
+            android:text="START" />
+
+    </LinearLayout>
+
+</LinearLayout>

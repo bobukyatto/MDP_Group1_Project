@@ -1,248 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="?android:attr/colorBackground"
+    android:orientation="vertical"
     tools:context=".MainActivity">
 
-    <LinearLayout
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Bluetooth Control"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
+        <com.google.android.material.appbar.AppBarLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
+            android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar">
 
-            <Button
-                android:id="@+id/btnScan"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Scan" />
+            <androidx.appcompat.widget.Toolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize"
+                app:title="MDP Group 1 Control" />
 
-            <Button
-                android:id="@+id/btnSettings"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:text="Settings" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Paired Devices"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textStyle="bold" />
-
-        <ListView
-            android:id="@+id/lvPairedDevices"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:layout_marginTop="4dp"
-            android:background="?attr/colorSurfaceVariant" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Available Devices"
-            android:textColor="?android:attr/textColorSecondary"
-            android:textStyle="bold" />
-
-        <ListView
-            android:id="@+id/lvBluetoothDevices"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:layout_marginTop="4dp"
-            android:background="?attr/colorSurfaceVariant" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="Grid Map Control"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <RadioGroup
-            android:id="@+id/rgSelectionMode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
-
-            <RadioButton
-                android:id="@+id/rbObstacle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:checked="true"
-                android:text="Obstacle" />
-
-            <RadioButton
-                android:id="@+id/rbVehicle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Start" />
-
-            <RadioButton
-                android:id="@+id/rbTarget"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Target" />
-        </RadioGroup>
-
-        <!-- Container for the grid to keep it square-ish -->
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="#444444"
-            android:padding="2dp">
-
-            <GridLayout
-                android:id="@+id/mapGrid"
+            <com.google.android.material.tabs.TabLayout
+                android:id="@+id/tabLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:alignmentMode="alignMargins"
-                android:columnCount="20"
-                android:rowCount="20" />
-        </FrameLayout>
+                app:tabGravity="fill"
+                app:tabMode="fixed" />
 
-        <Button
-            android:id="@+id/btnResetGrid"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:layout_marginTop="4dp"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:text="Reset Map" />
+        </com.google.android.material.appbar.AppBarLayout>
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="Manual Movement"
-            android:textColor="?android:attr/textColorPrimary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
+        <androidx.viewpager2.widget.ViewPager2
+            android:id="@+id/viewPager"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:orientation="horizontal">
+            android:layout_height="match_parent"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
 
-            <!-- Left Side: Movement Controls -->
-            <GridLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:columnCount="3"
-                android:rowCount="3">
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
-                <!-- Row 1 -->
-                <View android:layout_width="90dp" android:layout_height="90dp" />
-                <Button
-                    android:id="@+id/btnForward"
-                    android:layout_width="90dp"
-                    android:layout_height="90dp"
-                    android:text="↑"
-                    android:layout_margin="4dp"/>
-                <View android:layout_width="90dp" android:layout_height="90dp" />
+    <!-- Global Status Bar -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorSurfaceVariant"
+        android:elevation="8dp"
+        android:gravity="center"
+        android:padding="12dp"
+        android:text="Status: Disconnected"
+        android:textColor="?android:attr/textColorPrimary"
+        android:textSize="16sp"
+        android:textStyle="bold" />
 
-                <!-- Row 2 -->
-                <Button
-                    android:id="@+id/btnLeft"
-                    android:layout_width="90dp"
-                    android:layout_height="90dp"
-                    android:text="←"
-                    android:layout_margin="4dp"/>
-                <Button
-                    android:id="@+id/btnStop"
-                    android:layout_width="90dp"
-                    android:layout_height="90dp"
-                    android:text="STOP"
-                    android:backgroundTint="#FF5252"
-                    android:layout_margin="4dp"/>
-                <Button
-                    android:id="@+id/btnRight"
-                    android:layout_width="90dp"
-                    android:layout_height="90dp"
-                    android:text="→"
-                    android:layout_margin="4dp"/>
-
-                <!-- Row 3 -->
-                <View android:layout_width="90dp" android:layout_height="90dp" />
-                <Button
-                    android:id="@+id/btnBackward"
-                    android:layout_width="90dp"
-                    android:layout_height="90dp"
-                    android:text="↓"
-                    android:layout_margin="4dp"/>
-                <View android:layout_width="90dp" android:layout_height="90dp" />
-
-            </GridLayout>
-
-            <!-- Spacer -->
-            <View
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                android:layout_weight="1" />
-
-            <!-- Right Side: Mode Controls -->
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center_vertical"
-                android:orientation="vertical">
-
-                <Button
-                    android:id="@+id/btnAuto"
-                    android:layout_width="120dp"
-                    android:layout_height="80dp"
-                    android:text="Automatic" />
-
-                <Button
-                    android:id="@+id/btnStart"
-                    android:layout_width="120dp"
-                    android:layout_height="80dp"
-                    android:layout_marginTop="16dp"
-                    android:text="Start" />
-
-            </LinearLayout>
-
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/tvStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:gravity="center"
-            android:text="Status: Disconnected"
-            android:textColor="?android:attr/textColorPrimary" />
-
-    </LinearLayout>
-
-</androidx.core.widget.NestedScrollView>
+</LinearLayout>

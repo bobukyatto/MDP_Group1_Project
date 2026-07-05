@@ -15,10 +15,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.ListView;
@@ -27,10 +30,17 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
+
+import com.google.android.material.materialswitch.MaterialSwitch;
+import com.google.android.material.tabs.TabLayout;
+import com.google.android.material.tabs.TabLayoutMediator;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -59,8 +69,6 @@ public class MainActivity extends AppCompatActivity {
     private ArrayAdapter<String> pairedAdapter;
 
     private TextView tvStatus;
-    private GridLayout mapGrid;
-    private RadioGroup rgSelectionMode;
     private final ImageView[][] gridCells = new ImageView[20][20];
     private final Map<ImageView, Long> lastClickTimeMap = new HashMap<>();
 
@@ -83,47 +91,34 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
+
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
             return insets;
         });
-
-        // Initialize UI
+        
         tvStatus = findViewById(R.id.tvStatus);
-        ListView lvAvailable = findViewById(R.id.lvBluetoothDevices);
-        ListView lvPaired = findViewById(R.id.lvPairedDevices);
-        Button btnScan = findViewById(R.id.btnScan);
-        Button btnSettings = findViewById(R.id.btnSettings);
-        Button btnForward = findViewById(R.id.btnForward);
-        Button btnBackward = findViewById(R.id.btnBackward);
-        Button btnLeft = findViewById(R.id.btnLeft);
-        Button btnRight = findViewById(R.id.btnRight);
-        Button btnStop = findViewById(R.id.btnStop);
-        Button btnResetGrid = findViewById(R.id.btnResetGrid);
-        Button btnAuto = findViewById(R.id.btnAuto);
-        Button btnStart = findViewById(R.id.btnStart);
-        mapGrid = findViewById(R.id.mapGrid);
-        rgSelectionMode = findViewById(R.id.rgSelectionMode);
+        ViewPager2 viewPager = findViewById(R.id.viewPager);
+        TabLayout tabLayout = findViewById(R.id.tabLayout);
 
-        setupGrid();
-
-        availableAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, availableDevicesNames);
-        lvAvailable.setAdapter(availableAdapter);
-
-        pairedAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, pairedDevicesNames);
-        lvPaired.setAdapter(pairedAdapter);
+        viewPager.setAdapter(new TabAdapter());
+        new TabLayoutMediator(tabLayout, viewPager, (tab, position) -> {
+            switch (position) {
+                case 0: tab.setText("BLUETOOTH"); break;
+                case 1: tab.setText("CALIBRATE"); break;
+                case 2: tab.setText("MAP"); break;
+                case 3: tab.setText("MANUAL"); break;
+            }
+        }).attach();
 
         BluetoothManager bluetoothManager = getSystemService(BluetoothManager.class);
         bluetoothAdapter = bluetoothManager.getAdapter();
-
         if (bluetoothAdapter == null) {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
-
-        updatePairedDevices();
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(BluetoothDevice.ACTION_FOUND);
@@ -133,29 +128,178 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
         registerReceiver(receiver, filter);
 
-        btnScan.setOnClickListener(v -> startDiscovery());
-        btnSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
+        commandHandler.post(commandRunnable);
+    }
 
-        lvAvailable.setOnItemClickListener((parent, view, position, id) -> availableDevices.get(position).createBond());
-        lvPaired.setOnItemClickListener((parent, view, position, id) -> connectToDevice(pairedDevicesList.get(position)));
+    private class TabAdapter extends RecyclerView.Adapter<TabAdapter.ViewHolder> {
+        @NonNull
+        @Override
+        public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            int layoutId = 0;
+            switch (viewType) {
+                case 0: layoutId = R.layout.tab_bluetooth; break;
+                case 1: layoutId = R.layout.tab_calibrate; break;
+                case 2: layoutId = R.layout.tab_map; break;
+                case 3: layoutId = R.layout.tab_manual; break;
+            }
+            View view = LayoutInflater.from(parent.getContext()).inflate(layoutId, parent, false);
+            return new ViewHolder(view, viewType);
+        }
 
-        btnResetGrid.setOnClickListener(v -> resetGrid());
+        @Override
+        public void onBindViewHolder(@NonNull ViewHolder holder, int position) { holder.bind(); }
 
-        setupMovementButton(btnForward, "f");
-        setupMovementButton(btnBackward, "b");
-        setupMovementButton(btnLeft, "l");
-        setupMovementButton(btnRight, "r");
+        @Override
+        public int getItemCount() { return 4; }
+
+        @Override
+        public int getItemViewType(int position) { return position; }
+
+        class ViewHolder extends RecyclerView.ViewHolder {
+            int type;
+            ViewHolder(View itemView, int type) { super(itemView); this.type = type; }
+            void bind() {
+                switch (type) {
+                    case 0: setupBluetoothTab(itemView); break;
+                    case 1: setupCalibrateTab(itemView); break;
+                    case 2: setupMapTab(itemView); break;
+                    case 3: setupManualTab(itemView); break;
+                }
+            }
+        }
+    }
+
+    private void setupBluetoothTab(View v) {
+        ListView lvAvailable = v.findViewById(R.id.lvBluetoothDevices);
+        ListView lvPaired = v.findViewById(R.id.lvPairedDevices);
+        Button btnScan = v.findViewById(R.id.btnScan);
+        Button btnSettings = v.findViewById(R.id.btnSettings);
+
+        availableAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, availableDevicesNames);
+        lvAvailable.setAdapter(availableAdapter);
+        pairedAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, pairedDevicesNames);
+        lvPaired.setAdapter(pairedAdapter);
+
+        updatePairedDevices();
+
+        btnScan.setOnClickListener(view -> startDiscovery());
+        btnSettings.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
+        lvAvailable.setOnItemClickListener((p, view, pos, id) -> {
+            BluetoothDevice device = availableDevices.get(pos);
+            try { @SuppressLint("MissingPermission") boolean ignored = device.createBond(); } catch (Exception ignored) {}
+        });
+        lvPaired.setOnItemClickListener((p, view, pos, id) -> connectToDevice(pairedDevicesList.get(pos)));
+    }
+
+    private void setupCalibrateTab(View v) {
+        EditText etTime = v.findViewById(R.id.etCalibTime);
+        EditText etX = v.findViewById(R.id.etCalibX);
+        EditText etZ = v.findViewById(R.id.etCalibZ);
         
-        btnStop.setOnClickListener(v -> {
-            currentX = 0;
-            currentZ = 0;
-            sendCommand("0,0\n");
+        v.findViewById(R.id.btnSendCalib).setOnClickListener(view -> {
+            executeTimedCommand(etTime.getText().toString(), etX.getText().toString(), etZ.getText().toString());
         });
 
-        btnAuto.setOnClickListener(v -> sendCommand("auto\n"));
-        btnStart.setOnClickListener(v -> sendCommand("start\n"));
+        v.findViewById(R.id.btnCalibFwd).setOnClickListener(view -> executeTimedCommand("1000", "500", "0"));
+        v.findViewById(R.id.btnCalibLeft).setOnClickListener(view -> executeTimedCommand("1000", "0", "500"));
+    }
 
-        commandHandler.post(commandRunnable);
+    private void executeTimedCommand(String t, String x, String z) {
+        if (t.isEmpty() || x.isEmpty() || z.isEmpty()) return;
+        try {
+            int time = Integer.parseInt(t);
+            // Send the specific motion command
+            sendCommand(x + "," + z + "\n");
+            
+            // Automatically send a stop command after the specified time
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                sendCommand("0,0\n");
+                Toast.makeText(this, "Test complete: Stop sent", Toast.LENGTH_SHORT).show();
+            }, time);
+        } catch (NumberFormatException e) {
+            Toast.makeText(this, "Invalid input values", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void setupMapTab(View v) {
+        GridLayout mapGrid = v.findViewById(R.id.mapGrid);
+        RadioGroup rgMode = v.findViewById(R.id.rgSelectionMode);
+        MaterialSwitch swReverse = v.findViewById(R.id.swAllowReverse);
+        
+        v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid());
+        v.findViewById(R.id.btnSimulate).setOnClickListener(view -> sendCommand(constructMapMessage(true, swReverse.isChecked())));
+        v.findViewById(R.id.btnGo).setOnClickListener(view -> sendCommand(constructMapMessage(false, swReverse.isChecked())));
+
+        mapGrid.post(() -> {
+            int totalWidth = mapGrid.getWidth();
+            int cellSize = totalWidth / 20;
+            mapGrid.removeAllViews();
+            for (int r = 0; r < 20; r++) {
+                for (int c = 0; c < 20; c++) {
+                    ImageView cell = new ImageView(this);
+                    GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+                    params.width = cellSize - 2;
+                    params.height = cellSize - 2;
+                    params.setMargins(1, 1, 1, 1);
+                    cell.setLayoutParams(params);
+                    cell.setBackgroundColor(Color.LTGRAY);
+                    cell.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    cell.setOnClickListener(view -> handleCellInteraction(cell, rgMode));
+                    gridCells[r][c] = cell;
+                    mapGrid.addView(cell);
+                }
+            }
+        });
+    }
+
+    private String constructMapMessage(boolean isSim, boolean allowReverse) {
+        StringBuilder sb = new StringBuilder("MAP;");
+        String startStr = "";
+        List<String> obsStrs = new ArrayList<>();
+
+        for (int r = 0; r < 20; r++) {
+            for (int c = 0; c < 20; c++) {
+                ImageView cell = gridCells[r][c];
+                Object tag = cell.getTag();
+                int x = c;
+                int y = 19 - r; // (0,0) is bottom-left
+
+                if ("START".equals(tag)) {
+                    startStr = "START:" + x + "," + y + "," + getFacing(cell.getRotation());
+                } else if ("OBSTACLE".equals(tag)) {
+                    obsStrs.add("OBS:" + x + "," + y + "," + getFacing(cell.getRotation()));
+                } else if ("TARGET".equals(tag)) {
+                    // Logic for multiple targets not specified in protocol but we send as OBS or similar if needed
+                }
+            }
+        }
+
+        if (startStr.isEmpty()) return "ERR:No Start Location";
+        sb.append(startStr);
+        for (String obs : obsStrs) sb.append(";").append(obs);
+        
+        sb.append(";MODE:").append(allowReverse ? "RS" : "DUBINS");
+        sb.append(";").append(isSim ? "SIM" : "GO");
+        return sb.toString() + "\n";
+    }
+
+    private String getFacing(float rotation) {
+        int r = (int) rotation % 360;
+        if (r < 0) r += 360;
+        if (r == 0) return "N";
+        if (r == 90) return "E";
+        if (r == 180) return "S";
+        if (r == 270) return "W";
+        return "N";
+    }
+
+    private void setupManualTab(View v) {
+        setupMovementButton(v.findViewById(R.id.btnForward), "f");
+        setupMovementButton(v.findViewById(R.id.btnBackward), "b");
+        setupMovementButton(v.findViewById(R.id.btnLeft), "l");
+        setupMovementButton(v.findViewById(R.id.btnRight), "r");
+        v.findViewById(R.id.btnManualAuto).setOnClickListener(view -> sendCommand("auto\n"));
+        v.findViewById(R.id.btnManualStart).setOnClickListener(view -> sendCommand("start\n"));
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -187,16 +331,13 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             long now = System.currentTimeMillis();
-            
             if (isForward) {
                 int accel = (int)((now - fwdStart) / 150) * 15;
                 currentX = Math.min(1000, currentX + 50 + accel);
             } else if (isBackward) {
                 int accel = (int)((now - bwdStart) / 150) * 15;
                 currentX = Math.max(-1000, currentX - 50 - accel);
-            } else {
-                currentX = 0;
-            }
+            } else { currentX = 0; }
 
             if (isLeft) {
                 int accel = (int)((now - leftStart) / 150) * 15;
@@ -211,7 +352,6 @@ public class MainActivity extends AppCompatActivity {
                 lastSentX = currentX;
                 lastSentZ = currentZ;
             }
-            
             commandHandler.postDelayed(this, 50);
         }
     };
@@ -220,14 +360,8 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             if (bluetoothSocket != null) {
-                if (!bluetoothSocket.isConnected()) {
-                    handleDisconnect();
-                } else {
-                    // Send a "keep-alive" ping to check if the link is truly active
-                    // The RPi should ignore empty lines or single newlines
-                    sendCommand("\n");
-                    watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
-                }
+                if (!bluetoothSocket.isConnected()) handleDisconnect();
+                else { sendCommand("\n"); watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL); }
             }
         }
     };
@@ -237,38 +371,10 @@ public class MainActivity extends AppCompatActivity {
         try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
         bluetoothSocket = null;
         outputStream = null;
-        runOnUiThread(() -> {
-            tvStatus.setText("Status: Disconnected");
-            tvStatus.setTextColor(Color.RED);
-        });
+        runOnUiThread(() -> { tvStatus.setText("Status: Disconnected"); tvStatus.setTextColor(Color.RED); });
     }
 
-    private void setupGrid() {
-        mapGrid.post(() -> {
-            int totalWidth = mapGrid.getWidth();
-            int cellSize = totalWidth / 20;
-            mapGrid.removeAllViews();
-            for (int r = 0; r < 20; r++) {
-                for (int c = 0; c < 20; c++) {
-                    ImageView cell = new ImageView(this);
-                    GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-                    params.width = cellSize - 2;
-                    params.height = cellSize - 2;
-                    params.setMargins(1, 1, 1, 1);
-                    cell.setLayoutParams(params);
-                    cell.setBackgroundColor(Color.LTGRAY);
-                    cell.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                    final int row = r;
-                    final int col = c;
-                    cell.setOnClickListener(v -> handleCellInteraction(cell, row, col));
-                    gridCells[r][c] = cell;
-                    mapGrid.addView(cell);
-                }
-            }
-        });
-    }
-
-    private void handleCellInteraction(ImageView cell, int r, int c) {
+    private void handleCellInteraction(ImageView cell, RadioGroup rgMode) {
         long currentTime = System.currentTimeMillis();
         long lastClickTime = lastClickTimeMap.getOrDefault(cell, 0L);
         lastClickTimeMap.put(cell, currentTime);
@@ -281,14 +387,14 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        int checkedId = rgSelectionMode.getCheckedRadioButtonId();
+        int checkedId = rgMode.getCheckedRadioButtonId();
         Object tag = cell.getTag();
-
-        if ("OBSTACLE".equals(tag)) {
+        
+        // Cycle rotation if already placed
+        if (tag != null && checkedId != R.id.rbTarget) {
             cell.setRotation(cell.getRotation() + 90);
             return;
         }
-
         if (tag != null) return;
 
         if (checkedId == R.id.rbObstacle) {
@@ -303,9 +409,7 @@ public class MainActivity extends AppCompatActivity {
                 cell.setImageResource(R.drawable.ic_target);
                 cell.setTag("TARGET");
                 targetCount++;
-            } else {
-                Toast.makeText(this, "Max 6 targets", Toast.LENGTH_SHORT).show();
-            }
+            } else { Toast.makeText(this, "Max 6 targets", Toast.LENGTH_SHORT).show(); }
         }
     }
 
@@ -315,6 +419,7 @@ public class MainActivity extends AppCompatActivity {
                 if (targetTag.equals(gridCells[i][j].getTag())) {
                     gridCells[i][j].setImageDrawable(null);
                     gridCells[i][j].setTag(null);
+                    gridCells[i][j].setRotation(0);
                 }
             }
         }
@@ -341,7 +446,7 @@ public class MainActivity extends AppCompatActivity {
             pairedDevicesList.add(device);
             pairedDevicesNames.add(device.getName() + "\n" + device.getAddress());
         }
-        pairedAdapter.notifyDataSetChanged();
+        if(pairedAdapter != null) pairedAdapter.notifyDataSetChanged();
     }
 
     @SuppressLint("MissingPermission")
@@ -349,7 +454,7 @@ public class MainActivity extends AppCompatActivity {
         if (bluetoothAdapter.isDiscovering()) bluetoothAdapter.cancelDiscovery();
         availableDevices.clear();
         availableDevicesNames.clear();
-        availableAdapter.notifyDataSetChanged();
+        if(availableAdapter != null) availableAdapter.notifyDataSetChanged();
         bluetoothAdapter.startDiscovery();
     }
 
@@ -357,34 +462,21 @@ public class MainActivity extends AppCompatActivity {
     private void connectToDevice(BluetoothDevice device) {
         new Thread(() -> {
             try {
-                if (bluetoothSocket != null) {
-                    try { bluetoothSocket.close(); } catch (IOException ignored) {}
-                }
-                
-                // Cancel discovery before connecting is mandatory
+                if (bluetoothSocket != null) { try { bluetoothSocket.close(); } catch (IOException ignored) {} }
                 bluetoothAdapter.cancelDiscovery();
-                // Add a tiny delay to allow the adapter to settle
                 try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
                 bluetoothSocket.connect();
                 outputStream = bluetoothSocket.getOutputStream();
-                
                 runOnUiThread(() -> {
                     tvStatus.setText("Status: Connected to " + device.getName());
                     tvStatus.setTextColor(Color.GREEN);
-                    Toast.makeText(this, "Connected!", Toast.LENGTH_SHORT).show();
-                    
                     watchdogHandler.removeCallbacks(watchdogRunnable);
                     watchdogHandler.post(watchdogRunnable);
                 });
             } catch (IOException e) {
-                Log.e(TAG, "Connection failed", e);
-                // Try fallback connection if standard fails
                 try {
-                    bluetoothSocket = (BluetoothSocket) device.getClass()
-                            .getMethod("createRfcommSocket", new Class[]{int.class})
-                            .invoke(device, 1);
+                    bluetoothSocket = (BluetoothSocket) device.getClass().getMethod("createRfcommSocket", new Class[]{int.class}).invoke(device, 1);
                     bluetoothSocket.connect();
                     outputStream = bluetoothSocket.getOutputStream();
                     runOnUiThread(() -> {
@@ -395,10 +487,7 @@ public class MainActivity extends AppCompatActivity {
                     });
                 } catch (Exception e2) {
                     handleDisconnect();
-                    runOnUiThread(() -> {
-                        tvStatus.setText("Status: Connection Failed");
-                        tvStatus.setTextColor(Color.RED);
-                    });
+                    runOnUiThread(() -> { tvStatus.setText("Status: Connection Failed"); tvStatus.setTextColor(Color.RED); });
                 }
             }
         }).start();
@@ -406,12 +495,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendCommand(String command) {
         if (outputStream == null) return;
-        try {
-            outputStream.write(command.getBytes());
-        } catch (IOException e) {
-            Log.e(TAG, "Error sending", e);
-            handleDisconnect();
-        }
+        try { outputStream.write(command.getBytes()); } 
+        catch (IOException e) { Log.e(TAG, "Error sending", e); handleDisconnect(); }
     }
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -423,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
                 if (device != null && device.getName() != null && !availableDevices.contains(device)) {
                     availableDevices.add(device);
                     availableDevicesNames.add(device.getName() + "\n" + device.getAddress());
-                    availableAdapter.notifyDataSetChanged();
+                    if(availableAdapter != null) availableAdapter.notifyDataSetChanged();
                 }
             } else if (BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)) {
                 tvStatus.setText("Status: Scanning...");
@@ -435,9 +520,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
                 if (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_BONDED) updatePairedDevices();
-            } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
-                handleDisconnect();
-            }
+            } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) { handleDisconnect(); }
         }
     };
 
