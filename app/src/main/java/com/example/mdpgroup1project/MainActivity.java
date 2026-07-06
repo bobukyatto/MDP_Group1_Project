@@ -14,7 +14,6 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.DragEvent;
@@ -100,9 +99,6 @@ public class MainActivity extends AppCompatActivity {
     private int currentZ = 0;
     private int lastSentX = -9999;
     private int lastSentZ = -9999;
-
-    private boolean isCalibrationRunning = false;
-    private boolean isSwapped = false;
     
     private boolean isCalibrationRunning = false;
     private boolean isSwapped = false;
@@ -180,11 +176,8 @@ public class MainActivity extends AppCompatActivity {
         bluetoothAdapter = bluetoothManager.getAdapter();
         if (bluetoothAdapter == null) {
             Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
-//            finish();
+            finish();
             return;
-        }else if (!bluetoothAdapter.isEnabled()){
-            Intent enableBTIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            startActivity(enableBTIntent);
         }
 
         updatePairedDevices();
@@ -195,7 +188,7 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
         filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-        registerReceiver(bluetoothReceiver, filter);
+        registerReceiver(receiver, filter);
 
         commandHandler.post(commandRunnable);
     }
@@ -603,6 +596,7 @@ public class MainActivity extends AppCompatActivity {
             updateDeadReckoning(COMMAND_INTERVAL_MS / 1000.0);
             commandHandler.postDelayed(this, COMMAND_INTERVAL_MS);
         }
+    };
 
     private void updateDeadReckoning(double dtSec) {
         if (currentX == 0 && currentZ == 0) return;
@@ -698,66 +692,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private String getFacing(float rotation) {
-        int r = (int) rotation % 360; if (r < 0) r += 360;
-        if (r == 0) return "N"; if (r == 90) return "E"; if (r == 180) return "S"; if (r == 270) return "W";
-        return "N";
-    }
-
-    private void setupManualTab(View v) {
-        JoystickView joyL = v.findViewById(R.id.joystickLeft);
-        JoystickView joyR = v.findViewById(R.id.joystickRight);
-        updateJoystickRoles(joyL, joyR);
-        v.findViewById(R.id.btnSwap).setOnClickListener(view -> { isSwapped = !isSwapped; updateJoystickRoles(joyL, joyR); });
-        v.findViewById(R.id.btnStop).setOnClickListener(view -> { currentX = 0; currentZ = 0; sendCommand("0,0\n"); });
-        v.findViewById(R.id.btnManualAuto).setOnClickListener(view -> sendCommand("auto\n"));
-        v.findViewById(R.id.btnManualStart).setOnClickListener(view -> sendCommand("start\n"));
-    }
-
-    private void updateJoystickRoles(JoystickView left, JoystickView right) {
-        if (!isSwapped) {
-            left.setLabel("VELOCITY (X)"); left.setMode(true, false);
-            left.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
-                @Override public void onReleased() { currentX = 0; currentZ = 0; }
-            });
-            right.setLabel("STEERING (Z)"); right.setMode(false, true);
-            right.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
-                @Override public void onReleased() { currentZ = 0; }
-            });
-        } else {
-            left.setLabel("STEERING (Z)"); left.setMode(false, true);
-            left.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
-                @Override public void onReleased() { currentZ = 0; }
-            });
-            right.setLabel("VELOCITY (X)"); right.setMode(true, false);
-            right.setListener(new JoystickView.JoystickListener() {
-                @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
-                @Override public void onReleased() { currentX = 0; currentZ = 0; }
-            });
-        }
-    }
-    private final Runnable commandRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (currentX != lastSentX || currentZ != lastSentZ) {
-                sendCommand(currentX + "," + currentZ + "\n");
-                lastSentX = currentX; lastSentZ = currentZ;
-            }
-            commandHandler.postDelayed(this, 50);
-        }
-    };
-
-//    private final Runnable watchdogRunnable = new Runnable() {
-//        @Override
-//        public void run() {
-//            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) handleDisconnect();
-//            else if (bluetoothSocket != null) watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
-//        }
-//    };
-
     @SuppressLint("MissingPermission")
     private void updatePairedDevices() {
         pairedDevicesList.clear(); pairedDevicesNames.clear();
@@ -813,7 +747,6 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    // Sends command to connected bluetooth device
     private void sendCommand(String command) {
         if (outputStream == null) {
             Log.w(TAG, "Cannot send command: outputStream is null");
@@ -826,8 +759,7 @@ public class MainActivity extends AppCompatActivity {
         catch (IOException e) { Log.e(TAG, "Error sending", e); handleDisconnect(); }
     }
 
-    // Receiver for Bluetooth events
-    private final BroadcastReceiver bluetoothReceiver = new BroadcastReceiver() {
+    private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @SuppressLint("MissingPermission")
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -852,7 +784,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(bluetoothReceiver);
-
+        unregisterReceiver(receiver);
+        try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
     }
 }
