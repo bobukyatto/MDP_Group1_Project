@@ -64,4 +64,35 @@
         android:layout_marginTop="4dp"
         android:background="?attr/colorSurfaceVariant" />
 
+    <TextView
+        android:id="@+id/tvLastDetected"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="Last Detected: -"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Robot Status Log"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:id="@+id/svRobotLog"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:layout_marginTop="4dp"
+        android:background="?attr/colorSurfaceVariant"
+        android:padding="4dp">
+
+        <TextView
+            android:id="@+id/tvRobotLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textSize="11sp" />
+    </ScrollView>
+
 </LinearLayout>

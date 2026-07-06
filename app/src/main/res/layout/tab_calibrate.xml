@@ -69,6 +69,38 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
+            android:text="Turn to Angle"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Enter a heading change in degrees. Positive turns left, negative turns right." />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Angle (degrees)">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etCalibAngle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="numberSigned" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <Button
+            android:id="@+id/btnCalibTurn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Turn to Angle" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
             android:text="Quick Presets"
             android:textStyle="bold" />
 
@@ -86,11 +118,11 @@
                 android:text="Forward 1s" />
 
             <Button
-                android:id="@+id/btnCalibLeft"
+                android:id="@+id/btnCalibStop"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_columnWeight="1"
-                android:text="Left 90°" />
+                android:text="Stop" />
         </GridLayout>
 
     </LinearLayout>

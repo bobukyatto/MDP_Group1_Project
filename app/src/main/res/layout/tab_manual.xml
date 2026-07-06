@@ -48,7 +48,21 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_margin="8dp"
-            android:text="START" />
+            android:text="MANUAL" />
+
+        <Button
+            android:id="@+id/btnFindTarget"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="8dp"
+            android:text="FIND TARGET" />
+
+        <Button
+            android:id="@+id/btnScanImage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="8dp"
+            android:text="SCAN IMAGE" />
 
     </LinearLayout>
 
