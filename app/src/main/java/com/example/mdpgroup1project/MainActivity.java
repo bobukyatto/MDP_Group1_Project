@@ -136,6 +136,9 @@ public class MainActivity extends AppCompatActivity {
     private double carYcm = START_Y_CM;
     private double carHeadingDeg = 0.0;
 
+    // ic_car's artwork faces down (south) by default, but heading 0 means facing north/up.
+    private static final float ICON_FRONT_OFFSET_DEG = 180f;
+
     private ImageView carOverlay;
     private TextView tvMapStatus;
     private int mapGridPixelSize = 0;
@@ -363,7 +366,7 @@ public class MainActivity extends AppCompatActivity {
         int half = carIconSizePx / 2;
         carOverlay.setTranslationX((float) (carXcm * scale) - half);
         carOverlay.setTranslationY(mapGridPixelSize - (float) (carYcm * scale) - half);
-        carOverlay.setRotation((float) carHeadingDeg);
+        carOverlay.setRotation((float) carHeadingDeg + ICON_FRONT_OFFSET_DEG);
 
         if (tvMapStatus != null) {
             double headingNorm = ((carHeadingDeg % 360) + 360) % 360;
