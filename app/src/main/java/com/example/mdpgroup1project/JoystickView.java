@@ -63,8 +63,8 @@ public class JoystickView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         // Adapt colors to Dark Mode if necessary (using simple inversion for demo)
-        if ((getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
-                == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+        if ((getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK) 
+            == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
             circlePaint.setColor(Color.WHITE);
             circlePaint.setAlpha(30);
             thumbPaint.setColor(Color.LTGRAY);
