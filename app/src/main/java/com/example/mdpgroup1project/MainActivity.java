@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -16,9 +17,13 @@ import android.os.Looper;
 import android.os.Message;
 import android.provider.Settings;
 import android.util.Log;
-import android.view.MotionEvent;
+import android.view.DragEvent;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.ListView;
@@ -27,10 +32,17 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
+
+import com.google.android.material.materialswitch.MaterialSwitch;
+import com.google.android.material.tabs.TabLayout;
+import com.google.android.material.tabs.TabLayoutMediator;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -60,25 +72,28 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView tvStatus;
     private TextView tvReceive;
-    private GridLayout mapGrid;
-    private RadioGroup rgSelectionMode;
-    private final ImageView[][] gridCells = new ImageView[20][20];
-    private final Map<ImageView, Long> lastClickTimeMap = new HashMap<>();
 
-    private int targetCount = 0;
+    // Persistent Map State
+    private final String[][] mapData = new String[20][20]; // Stores "START", "OBSTACLE"
+    private final float[][] mapRotation = new float[20][20];
+    private final boolean[][] hasFace = new boolean[20][20];
+    private final Map<String, Long> lastClickTimeMap = new HashMap<>();
+
+    private int obstacleCount = 0;
     private int currentX = 0;
     private int currentZ = 0;
     private int lastSentX = -9999;
     private int lastSentZ = -9999;
-    
-    private boolean isForward = false, isBackward = false, isLeft = false, isRight = false;
-    private long fwdStart = 0, bwdStart = 0, leftStart = 0, rightStart = 0;
+
+    private boolean isCalibrationRunning = false;
+    private boolean isSwapped = false;
     
     private final Handler commandHandler = new Handler(Looper.getMainLooper()){
         public void handleMessage(Message msg) {
             String message = (String) msg.obj;
-            tvReceive = findViewById(R.id.tvReceive);
-            tvReceive.setText(message);
+//            TODO: show received bluetooth inputs in message box
+//            tvReceive = findViewById(R.id.tvReceive);
+//            tvReceive.setText(message);
             Log.i(TAG, "InputStream received message:" +message);
 //            setContentView(tvReceive);
 
@@ -101,32 +116,28 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize UI
         tvStatus = findViewById(R.id.tvStatus);
-        tvReceive = findViewById(R.id.tvReceive);
-        ListView lvAvailable = findViewById(R.id.lvBluetoothDevices);
-        ListView lvPaired = findViewById(R.id.lvPairedDevices);
-        Button btnScan = findViewById(R.id.btnScan);
-        Button btnSettings = findViewById(R.id.btnSettings);
-        Button btnForward = findViewById(R.id.btnForward);
-        Button btnBackward = findViewById(R.id.btnBackward);
-        Button btnLeft = findViewById(R.id.btnLeft);
-        Button btnRight = findViewById(R.id.btnRight);
-        Button btnStop = findViewById(R.id.btnStop);
-        Button btnResetGrid = findViewById(R.id.btnResetGrid);
-        Button btnAuto = findViewById(R.id.btnAuto);
-        Button btnStart = findViewById(R.id.btnStart);
-        mapGrid = findViewById(R.id.mapGrid);
-        rgSelectionMode = findViewById(R.id.rgSelectionMode);
-
-        setupGrid();
+//        TODO: show received bluetooth inputs in message box
+//        tvReceive = findViewById(R.id.tvReceive);
 
         // Bluetooth setup
         mBluetoothConnection = new BluetoothConnectionService(MainActivity.this, commandHandler);
 
         availableAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, availableDevicesNames);
-        lvAvailable.setAdapter(availableAdapter);
 
         pairedAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, pairedDevicesNames);
-        lvPaired.setAdapter(pairedAdapter);
+        ViewPager2 viewPager = findViewById(R.id.viewPager);
+        TabLayout tabLayout = findViewById(R.id.tabLayout);
+
+        viewPager.setAdapter(new TabAdapter());
+        viewPager.setOffscreenPageLimit(3);
+        new TabLayoutMediator(tabLayout, viewPager, (tab, position) -> {
+            switch (position) {
+                case 0: tab.setText("BLUETOOTH"); break;
+                case 1: tab.setText("CALIBRATE"); break;
+                case 2: tab.setText("MAP"); break;
+                case 3: tab.setText("MANUAL"); break;
+            }
+        }).attach();
 
         BluetoothManager bluetoothManager = getSystemService(BluetoothManager.class);
         bluetoothAdapter = bluetoothManager.getAdapter();
@@ -151,206 +162,301 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
         registerReceiver(bluetoothReceiver, filter);
 
-        btnScan.setOnClickListener(v -> startDiscovery());
-        btnSettings.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
 
-        // When item in available devices list is tapped, connect to it.
-        lvAvailable.setOnItemClickListener((parent, view, position, id) -> availableDevices.get(position).createBond());
-
-        // When item in paired devices list is tapped, connect to it.
-        lvPaired.setOnItemClickListener((parent, view, position, id) -> connectToDevice(pairedDevicesList.get(position)));
-
-        btnResetGrid.setOnClickListener(v -> resetGrid());
-
-        setupMovementButton(btnForward, "f");
-        setupMovementButton(btnBackward, "b");
-        setupMovementButton(btnLeft, "l");
-        setupMovementButton(btnRight, "r");
-        
-        btnStop.setOnClickListener(v -> {
-            currentX = 0;
-            currentZ = 0;
-            sendCommand("0,0\n");
-        });
-
-        btnAuto.setOnClickListener(v -> sendCommand("auto\n"));
-        btnStart.setOnClickListener(v -> sendCommand("start\n"));
-
-//        commandHandler.post(commandRunnable);
+        commandHandler.post(commandRunnable);
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private void setupMovementButton(Button btn, String type) {
-        btn.setOnTouchListener((v, event) -> {
-            long now = System.currentTimeMillis();
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    switch (type) {
-                        case "f" -> {
-                            isForward = true;
-                            fwdStart = now;
-                            sendCommand("f");
-                            Log.i(TAG, "Bluetooth forward");
-                        }
-                        case "b" -> {
-                            isBackward = true;
-                            bwdStart = now;
-                            sendCommand("b");
-                        }
-                        case "l" -> {
-                            isLeft = true;
-                            leftStart = now;
-                            sendCommand("l");
-                        }
-                        case "r" -> {
-                            isRight = true;
-                            rightStart = now;
-                            sendCommand("r");
-                        }
-                    }
-                    v.setPressed(true);
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    switch (type) {
-                        case "f" -> isForward = false;
-                        case "b" -> isBackward = false;
-                        case "l" -> isLeft = false;
-                        case "r" -> isRight = false;
-                    }
-                    v.setPressed(false);
-                    return true;
+    private class TabAdapter extends RecyclerView.Adapter<TabAdapter.ViewHolder> {
+        @NonNull
+        @Override
+        public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            int layoutId = 0;
+            switch (viewType) {
+                case 0: layoutId = R.layout.tab_bluetooth; break;
+                case 1: layoutId = R.layout.tab_calibrate; break;
+                case 2: layoutId = R.layout.tab_map; break;
+                case 3: layoutId = R.layout.tab_manual; break;
             }
-            return false;
-        });
+            View view = LayoutInflater.from(parent.getContext()).inflate(layoutId, parent, false);
+            return new ViewHolder(view, viewType);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull ViewHolder holder, int position) { holder.bind(); }
+        @Override
+        public int getItemCount() { return 4; }
+        @Override
+        public int getItemViewType(int position) { return position; }
+
+        class ViewHolder extends RecyclerView.ViewHolder {
+            int type;
+            ViewHolder(View itemView, int type) { super(itemView); this.type = type; }
+            void bind() {
+                switch (type) {
+                    case 0: setupBluetoothTab(itemView); break;
+                    case 1: setupCalibrateTab(itemView); break;
+                    case 2: setupMapTab(itemView); break;
+                    case 3: setupManualTab(itemView); break;
+                }
+            }
+        }
     }
 
-    // Moves the robot
-//    private final Runnable commandRunnable = new Runnable() {
-//        @Override
-//        public void run() {
-//            long now = System.currentTimeMillis();
-//
-//            if (isForward) {
-//                int accel = (int)((now - fwdStart) / 150) * 15;
-//                currentX = Math.min(1000, currentX + 50 + accel);
-//            } else if (isBackward) {
-//                int accel = (int)((now - bwdStart) / 150) * 15;
-//                currentX = Math.max(-1000, currentX - 50 - accel);
-//            } else {
-//                currentX = 0;
-//            }
-//
-//            if (isLeft) {
-//                int accel = (int)((now - leftStart) / 150) * 15;
-//                currentZ = Math.min(1000, currentZ + 50 + accel);
-//            } else if (isRight) {
-//                int accel = (int)((now - rightStart) / 150) * 15;
-//                currentZ = Math.max(-1000, currentZ - 50 - accel);
-//            }
-//
-//            if (currentX != lastSentX || currentZ != lastSentZ) {
-//                sendCommand(currentX + "," + currentZ + "\n");
-//                lastSentX = currentX;
-//                lastSentZ = currentZ;
-//            }
-//
-//            commandHandler.postDelayed(this, 50);
-//        }
-//    };
+    private void setupBluetoothTab(View v) {
+        ListView lvAvailable = v.findViewById(R.id.lvBluetoothDevices);
+        ListView lvPaired = v.findViewById(R.id.lvPairedDevices);
+        v.findViewById(R.id.btnScan).setOnClickListener(view -> startDiscovery());
+        v.findViewById(R.id.btnSettings).setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
 
+        lvAvailable.setAdapter(availableAdapter);
+        lvPaired.setAdapter(pairedAdapter);
 
-    private void setupGrid() {
+        lvAvailable.setOnItemClickListener((p, view, pos, id) -> {
+            BluetoothDevice device = availableDevices.get(pos);
+            try { @SuppressLint("MissingPermission") boolean ignored = device.createBond(); } catch (Exception ignored) {}
+        });
+        lvPaired.setOnItemClickListener((p, view, pos, id) -> connectToDevice(pairedDevicesList.get(pos)));
+    }
+
+    private void setupCalibrateTab(View v) {
+        EditText etTime = v.findViewById(R.id.etCalibTime);
+        EditText etX = v.findViewById(R.id.etCalibX);
+        EditText etZ = v.findViewById(R.id.etCalibZ);
+        v.findViewById(R.id.btnSendCalib).setOnClickListener(view ->
+                executeTimedCommand(etTime.getText().toString(), etX.getText().toString(), etZ.getText().toString()));
+        v.findViewById(R.id.btnCalibFwd).setOnClickListener(view -> executeTimedCommand("1.0", "500", "0"));
+        v.findViewById(R.id.btnCalibLeft).setOnClickListener(view -> executeTimedCommand("1.0", "0", "500"));
+    }
+
+    private void executeTimedCommand(String t, String x, String z) {
+        if (t.isEmpty() || x.isEmpty() || z.isEmpty()) return;
+        try {
+            int timeMs = (int) (Double.parseDouble(t) * 1000);
+            isCalibrationRunning = true;
+            currentX = Integer.parseInt(x);
+            currentZ = Integer.parseInt(z);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                isCalibrationRunning = false;
+                currentX = 0; currentZ = 0;
+                Toast.makeText(this, "Calibration complete", Toast.LENGTH_SHORT).show();
+            }, timeMs);
+        } catch (Exception e) { Toast.makeText(this, "Invalid input", Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void setupMapTab(View v) {
+        GridLayout mapGrid = v.findViewById(R.id.mapGrid);
+        MaterialSwitch swReverse = v.findViewById(R.id.swAllowReverse);
+        ImageView imgDragRobot = v.findViewById(R.id.imgDragRobot);
+        ImageView imgDragObstacle = v.findViewById(R.id.imgDragObstacle);
+
+        v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid(mapGrid));
+        v.findViewById(R.id.btnSimulate).setOnClickListener(view -> sendCommand(constructMapMessage(true, swReverse.isChecked())));
+        v.findViewById(R.id.btnGo).setOnClickListener(view -> sendCommand(constructMapMessage(false, swReverse.isChecked())));
+
+        imgDragRobot.setOnLongClickListener(view -> {
+            ClipData data = ClipData.newPlainText("type", "START");
+            view.startDragAndDrop(data, new View.DragShadowBuilder(view), null, 0);
+            return true;
+        });
+
+        imgDragObstacle.setOnLongClickListener(view -> {
+            ClipData data = ClipData.newPlainText("type", "OBSTACLE");
+            view.startDragAndDrop(data, new View.DragShadowBuilder(view), null, 0);
+            return true;
+        });
+
         mapGrid.post(() -> {
-            int totalWidth = mapGrid.getWidth();
-            int cellSize = totalWidth / 20;
+            int cellSize = mapGrid.getWidth() / 20;
             mapGrid.removeAllViews();
             for (int r = 0; r < 20; r++) {
                 for (int c = 0; c < 20; c++) {
                     ImageView cell = new ImageView(this);
                     GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-                    params.width = cellSize - 2;
-                    params.height = cellSize - 2;
+                    params.width = cellSize - 2; params.height = cellSize - 2;
                     params.setMargins(1, 1, 1, 1);
                     cell.setLayoutParams(params);
                     cell.setBackgroundColor(Color.LTGRAY);
                     cell.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                    final int row = r;
-                    final int col = c;
-                    cell.setOnClickListener(v -> handleCellInteraction(cell, row, col));
-                    gridCells[r][c] = cell;
+
+                    final int row = r; final int col = c;
+                    refreshCellUI(cell, row, col);
+
+                    cell.setOnClickListener(view -> handleCellTap(cell, row, col));
+                    cell.setOnDragListener((view, event) -> {
+                        if (event.getAction() == DragEvent.ACTION_DROP) {
+                            String type = event.getClipData().getItemAt(0).getText().toString();
+                            placeAt(cell, row, col, type);
+                            return true;
+                        }
+                        return true;
+                    });
                     mapGrid.addView(cell);
                 }
             }
         });
     }
 
-    private void handleCellInteraction(ImageView cell, int r, int c) {
-        long currentTime = System.currentTimeMillis();
-        long lastClickTime = lastClickTimeMap.getOrDefault(cell, 0L);
-        lastClickTimeMap.put(cell, currentTime);
-
-        if (currentTime - lastClickTime < 300) {
-            if ("TARGET".equals(cell.getTag())) targetCount--;
-            cell.setImageDrawable(null);
-            cell.setTag(null);
-            cell.setRotation(0);
-            return;
-        }
-
-        int checkedId = rgSelectionMode.getCheckedRadioButtonId();
-        Object tag = cell.getTag();
-
-        if ("OBSTACLE".equals(tag)) {
-            cell.setRotation(cell.getRotation() + 90);
-            return;
-        }
-
-        if (tag != null) return;
-
-        if (checkedId == R.id.rbObstacle) {
-            cell.setImageResource(R.drawable.ic_obstacle);
-            cell.setTag("OBSTACLE");
-        } else if (checkedId == R.id.rbVehicle) {
-            clearTag("START");
-            cell.setImageResource(R.drawable.robot);
-            cell.setOnClickListener(l -> {
-                //TODO: rotate?
-            });
-            cell.setTag("START");
-        } else if (checkedId == R.id.rbTarget) {
-            if (targetCount < 6) {
-                cell.setImageResource(R.drawable.ic_target);
-                cell.setTag("TARGET");
-                targetCount++;
-            } else {
-                Toast.makeText(this, "Max 6 targets", Toast.LENGTH_SHORT).show();
-            }
-        }
-    }
-
-    private void clearTag(String targetTag) {
-        for (int i = 0; i < 20; i++) {
-            for (int j = 0; j < 20; j++) {
-                if (targetTag.equals(gridCells[i][j].getTag())) {
-                    gridCells[i][j].setImageDrawable(null);
-                    gridCells[i][j].setTag(null);
+    private void placeAt(ImageView cell, int r, int c, String type) {
+        if ("START".equals(type)) {
+            clearPreviousStart();
+            mapData[r][c] = "START";
+            mapRotation[r][c] = 0;
+            hasFace[r][c] = true;
+        } else if ("OBSTACLE".equals(type)) {
+            if (mapData[r][c] == null) {
+                if (obstacleCount < 6) {
+                    mapData[r][c] = "OBSTACLE";
+                    mapRotation[r][c] = 0;
+                    hasFace[r][c] = false;
+                    obstacleCount++;
+                } else {
+                    Toast.makeText(this, "Max 6 obstacles reached", Toast.LENGTH_SHORT).show();
                 }
             }
         }
+        refreshCellUI(cell, r, c);
     }
 
-    private void resetGrid() {
+    private void handleCellTap(ImageView cell, int r, int c) {
+        long now = System.currentTimeMillis();
+        String key = r + "," + c;
+        long last = lastClickTimeMap.getOrDefault(key, 0L);
+        lastClickTimeMap.put(key, now);
+
+        if (now - last < 300) { // Double Tap to Remove
+            if ("OBSTACLE".equals(mapData[r][c])) obstacleCount--;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            cell.setImageDrawable(null); cell.setRotation(0);
+            return;
+        }
+
+        if (mapData[r][c] == null) return;
+
+        if ("OBSTACLE".equals(mapData[r][c])) {
+            if (!hasFace[r][c]) {
+                hasFace[r][c] = true;
+                mapRotation[r][c] = 0;
+            } else {
+                mapRotation[r][c] = (mapRotation[r][c] + 90) % 360;
+                // If back to 0 after full cycle, maybe back to no face?
+                // Request said "select no face on first tap and n,s,e,w on subsequent tabs"
+                // So: Drag -> No Face. Tap -> N. Tap -> E. Tap -> S. Tap -> W. Tap -> No Face.
+                if (mapRotation[r][c] == 0) hasFace[r][c] = false;
+            }
+        } else if ("START".equals(mapData[r][c])) {
+            mapRotation[r][c] = (mapRotation[r][c] + 90) % 360;
+        }
+        refreshCellUI(cell, r, c);
+    }
+
+    private void refreshCellUI(ImageView cell, int r, int c) {
+        String type = mapData[r][c];
+        if (type == null) { cell.setImageDrawable(null); cell.setRotation(0); return; }
+        if ("START".equals(type)) cell.setImageResource(R.drawable.ic_car);
+        else if ("OBSTACLE".equals(type)) {
+            if (hasFace[r][c]) cell.setImageResource(R.drawable.ic_obstacle);
+            else cell.setImageResource(R.drawable.ic_obstacle_no_face);
+        }
+        cell.setRotation(mapRotation[r][c]);
+    }
+
+    private void clearPreviousStart() {
+        for (int i = 0; i < 20; i++) for (int j = 0; j < 20; j++)
+            if ("START".equals(mapData[i][j])) { mapData[i][j] = null; mapRotation[i][j] = 0; }
+    }
+
+    private void resetGrid(GridLayout grid) {
+        for (int r = 0; r < 20; r++) for (int c = 0; c < 20; c++) {
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            ImageView v = (ImageView) grid.getChildAt(r * 20 + c);
+            if(v != null) { v.setImageDrawable(null); v.setRotation(0); }
+        }
+        obstacleCount = 0; lastClickTimeMap.clear();
+    }
+
+    private String constructMapMessage(boolean isSim, boolean allowReverse) {
+        StringBuilder sb = new StringBuilder("MAP;");
+        String startStr = "";
+        List<String> obsStrs = new ArrayList<>();
         for (int r = 0; r < 20; r++) {
             for (int c = 0; c < 20; c++) {
-                gridCells[r][c].setImageDrawable(null);
-                gridCells[r][c].setTag(null);
-                gridCells[r][c].setRotation(0);
+                if ("START".equals(mapData[r][c])) startStr = "START:" + c + "," + (19 - r) + "," + getFacing(mapRotation[r][c]);
+                else if ("OBSTACLE".equals(mapData[r][c])) {
+                    // Protocol needs a face. If "No Face" is selected, we send 'N' or skip?
+                    // User said "image that requires my camera to detect".
+                    // I will skip obstacles with no face in the message if they don't need detection.
+                    if (hasFace[r][c]) {
+                        obsStrs.add("OBS:" + c + "," + (19 - r) + "," + getFacing(mapRotation[r][c]));
+                    }
+                }
             }
         }
-        targetCount = 0;
-        lastClickTimeMap.clear();
+        if (startStr.isEmpty()) return "ERR:No Start Location";
+        sb.append(startStr);
+        for (String obs : obsStrs) sb.append(";").append(obs);
+        sb.append(";MODE:").append(allowReverse ? "RS" : "DUBINS").append(";").append(isSim ? "SIM" : "GO");
+        return sb.toString() + "\n";
     }
+
+    private String getFacing(float rotation) {
+        int r = (int) rotation % 360; if (r < 0) r += 360;
+        if (r == 0) return "N"; if (r == 90) return "E"; if (r == 180) return "S"; if (r == 270) return "W";
+        return "N";
+    }
+
+    private void setupManualTab(View v) {
+        JoystickView joyL = v.findViewById(R.id.joystickLeft);
+        JoystickView joyR = v.findViewById(R.id.joystickRight);
+        updateJoystickRoles(joyL, joyR);
+        v.findViewById(R.id.btnSwap).setOnClickListener(view -> { isSwapped = !isSwapped; updateJoystickRoles(joyL, joyR); });
+        v.findViewById(R.id.btnStop).setOnClickListener(view -> { currentX = 0; currentZ = 0; sendCommand("0,0\n"); });
+        v.findViewById(R.id.btnManualAuto).setOnClickListener(view -> sendCommand("auto\n"));
+        v.findViewById(R.id.btnManualStart).setOnClickListener(view -> sendCommand("start\n"));
+    }
+
+    private void updateJoystickRoles(JoystickView left, JoystickView right) {
+        if (!isSwapped) {
+            left.setLabel("VELOCITY (X)"); left.setMode(true, false);
+            left.setListener(new JoystickView.JoystickListener() {
+                @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
+                @Override public void onReleased() { currentX = 0; currentZ = 0; }
+            });
+            right.setLabel("STEERING (Z)"); right.setMode(false, true);
+            right.setListener(new JoystickView.JoystickListener() {
+                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
+                @Override public void onReleased() { currentZ = 0; }
+            });
+        } else {
+            left.setLabel("STEERING (Z)"); left.setMode(false, true);
+            left.setListener(new JoystickView.JoystickListener() {
+                @Override public void onMoved(float x, float y) { currentZ = (int)(-x * 1000); }
+                @Override public void onReleased() { currentZ = 0; }
+            });
+            right.setLabel("VELOCITY (X)"); right.setMode(true, false);
+            right.setListener(new JoystickView.JoystickListener() {
+                @Override public void onMoved(float x, float y) { currentX = (int)(y * 1000); }
+                @Override public void onReleased() { currentX = 0; currentZ = 0; }
+            });
+        }
+    }
+    private final Runnable commandRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (currentX != lastSentX || currentZ != lastSentZ) {
+                sendCommand(currentX + "," + currentZ + "\n");
+                lastSentX = currentX; lastSentZ = currentZ;
+            }
+            commandHandler.postDelayed(this, 50);
+        }
+    };
+
+//    private final Runnable watchdogRunnable = new Runnable() {
+//        @Override
+//        public void run() {
+//            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) handleDisconnect();
+//            else if (bluetoothSocket != null) watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
+//        }
+//    };
 
     @SuppressLint("MissingPermission")
     private void updatePairedDevices() {
@@ -369,7 +475,7 @@ public class MainActivity extends AppCompatActivity {
         if (bluetoothAdapter.isDiscovering()) bluetoothAdapter.cancelDiscovery();
         availableDevices.clear();
         availableDevicesNames.clear();
-        availableAdapter.notifyDataSetChanged();
+        if(availableAdapter != null) availableAdapter.notifyDataSetChanged();
         bluetoothAdapter.startDiscovery();
     }
 
