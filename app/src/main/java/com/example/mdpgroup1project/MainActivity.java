@@ -139,6 +139,7 @@ public class MainActivity extends AppCompatActivity {
     private ImageView carOverlay;
     private TextView tvMapStatus;
     private int mapGridPixelSize = 0;
+    private int carIconSizePx = 0;
 
     @SuppressLint("MissingPermission")
     @Override
@@ -347,6 +348,7 @@ public class MainActivity extends AppCompatActivity {
             ViewGroup.LayoutParams carParams = carOverlay.getLayoutParams();
             carParams.width = cellSize; carParams.height = cellSize;
             carOverlay.setLayoutParams(carParams);
+            carIconSizePx = cellSize;
             updateMapOverlay();
         });
     }
@@ -358,7 +360,7 @@ public class MainActivity extends AppCompatActivity {
     private void updateMapOverlay() {
         if (carOverlay == null || mapGridPixelSize <= 0) return;
         float scale = mapGridPixelSize / (float) ARENA_SIZE_CM;
-        int half = carOverlay.getWidth() / 2;
+        int half = carIconSizePx / 2;
         carOverlay.setTranslationX((float) (carXcm * scale) - half);
         carOverlay.setTranslationY(mapGridPixelSize - (float) (carYcm * scale) - half);
         carOverlay.setRotation((float) carHeadingDeg);
