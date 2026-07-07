@@ -65,7 +65,6 @@ public class MainActivity extends AppCompatActivity {
     // Custom SPP UUID advertised by the Pi's "MDP-Server" service (nanocar_control_v5.py).
     private static final UUID SPP_UUID = UUID.fromString("94f39d29-7d6d-437d-973b-fba39e49d4ee");
 
-    private BluetoothConnectionService mBluetoothConnection;
     private BluetoothAdapter bluetoothAdapter;
     private BluetoothSocket bluetoothSocket;
     private OutputStream outputStream;
@@ -106,15 +105,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isCalibrationRunning = false;
     private boolean isSwapped = false;
 
-    private final Handler commandHandler = new Handler(Looper.getMainLooper()){
-        public void handleMessage(Message msg) {
-            String message = (String) msg.obj;
-//            show received bluetooth inputs in message box
-            appendRobotLog(message);
-            Log.i(TAG, "InputStream received message:" +message);
-
-        }
-    };
+    private final Handler commandHandler = new Handler(Looper.getMainLooper());
 
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private static final int WATCHDOG_INTERVAL = 2000;
@@ -170,9 +161,6 @@ public class MainActivity extends AppCompatActivity {
         });
         
         tvStatus = findViewById(R.id.tvStatus);
-
-        // Bluetooth connection service setup
-        mBluetoothConnection = new BluetoothConnectionService(MainActivity.this, commandHandler);
 
         availableAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, availableDevicesNames);
         pairedAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, pairedDevicesNames);
@@ -732,7 +720,6 @@ public class MainActivity extends AppCompatActivity {
     private void connectToDevice(BluetoothDevice device) {
         new Thread(() -> {
             try {
-                mBluetoothConnection.startClient(device, device.getUuids()[0].getUuid());
                 if (bluetoothSocket != null) { try { bluetoothSocket.close(); } catch (IOException ignored) {} bluetoothSocket = null; }
                 bluetoothAdapter.cancelDiscovery();
                 try { Thread.sleep(500); } catch (InterruptedException ignored) {}
@@ -749,7 +736,6 @@ public class MainActivity extends AppCompatActivity {
                 });
             } catch (IOException e) {
                 try {
-                    mBluetoothConnection.startClient(device, device.getUuids()[0].getUuid());
                     bluetoothSocket = (BluetoothSocket) device.getClass().getMethod("createRfcommSocket", new Class[]{int.class}).invoke(device, 1);
                     bluetoothSocket.connect();
                     outputStream = bluetoothSocket.getOutputStream();
