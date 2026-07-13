@@ -76,9 +76,15 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvLastDetected;
     private TextView tvRobotLogMap;
     private ScrollView svRobotLogMap;
+
+    private TextView tvReceivedLog;
+    private ScrollView svReceivedLog;
+    private TextView tvReceivedLogMap;
+    private ScrollView svReceivedLogMap;
     private TextView tvLastDetectedMap;
     private static final int MAX_LOG_LINES = 300;
     private final List<String> robotLogLines = new ArrayList<>();
+    private final List<String> receivedLogLines = new ArrayList<>();
 
     private final List<BluetoothDevice> availableDevices = new ArrayList<>();
     private final List<String> availableDevicesNames = new ArrayList<>();
@@ -241,6 +247,8 @@ public class MainActivity extends AppCompatActivity {
         ListView lvPaired = v.findViewById(R.id.lvPairedDevices);
         tvRobotLog = v.findViewById(R.id.tvRobotLog);
         svRobotLog = v.findViewById(R.id.svRobotLog);
+        tvReceivedLog = v.findViewById(R.id.tvReceivedLog);
+        svReceivedLog = v.findViewById(R.id.svReceivedLog);
         tvLastDetected = v.findViewById(R.id.tvLastDetected);
         v.findViewById(R.id.btnScan).setOnClickListener(view -> startDiscovery());
         v.findViewById(R.id.btnSettings).setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
@@ -310,6 +318,8 @@ public class MainActivity extends AppCompatActivity {
         tvMapStatus = v.findViewById(R.id.tvMapStatus);
         tvRobotLogMap = v.findViewById(R.id.tvRobotLog);
         svRobotLogMap = v.findViewById(R.id.svRobotLog);
+        tvReceivedLogMap = v.findViewById(R.id.tvReceivedLog);
+        svReceivedLogMap = v.findViewById(R.id.svReceivedLog);
         tvLastDetectedMap = v.findViewById(R.id.tvLastDetected);
         renderRobotLog();
 
@@ -378,6 +388,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // Obstacle drag to map function
     private boolean handlePaletteTouch(View view, MotionEvent event, String type) {
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
             DragState state = new DragState();
@@ -476,7 +487,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void handleCellTap(ImageView cell, int r, int c) {
         if (isStartZone(r, c)) return;
-
         long now = System.currentTimeMillis();
         String key = r + "," + c;
         long last = lastClickTimeMap.getOrDefault(key, 0L);
@@ -626,7 +636,15 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable watchdogRunnable = new Runnable() {
         @Override
         public void run() {
-            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) handleDisconnect();
+            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) {
+                try {
+                    // Retry bluetooth connection to device
+                    Toast.makeText(MainActivity.this, "Retrying connection to device...", Toast.LENGTH_SHORT).show();
+                    bluetoothSocket.connect();
+                } catch (IOException e) {
+                    handleDisconnect();
+                }
+            }
             else if (bluetoothSocket != null) watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
         }
     };
@@ -650,7 +668,11 @@ public class MainActivity extends AppCompatActivity {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     final String received = line;
-                    runOnUiThread(() -> appendRobotLog(received));
+                    runOnUiThread(() -> {
+                        appendRobotLog(received);
+                        appendReceivedLog("[RECEIVED]: "+received);
+                    });
+
                 }
             } catch (IOException e) {
                 Log.w(TAG, "Read loop ended: " + e.getMessage());
@@ -666,6 +688,13 @@ public class MainActivity extends AppCompatActivity {
         robotLogLines.add(line);
         while (robotLogLines.size() > MAX_LOG_LINES) robotLogLines.remove(0);
         renderRobotLog();
+        parseAndUpdateDetection(line);
+    }
+
+    private void appendReceivedLog(String line) {
+        receivedLogLines.add(line);
+        while (receivedLogLines.size() > MAX_LOG_LINES) receivedLogLines.remove(0);
+        renderReceivedLog();
         parseAndUpdateDetection(line);
     }
 
@@ -697,6 +726,18 @@ public class MainActivity extends AppCompatActivity {
         if (tvRobotLogMap != null) {
             tvRobotLogMap.setText(text);
             if (svRobotLogMap != null) svRobotLogMap.post(() -> svRobotLogMap.fullScroll(View.FOCUS_DOWN));
+        }
+    }
+
+    private void renderReceivedLog() {
+        String text = String.join("\n", receivedLogLines);
+        if (tvReceivedLog != null) {
+            tvReceivedLog.setText(text);
+            if (svReceivedLog != null) svReceivedLog.post(() -> svReceivedLog.fullScroll(View.FOCUS_DOWN));
+        }
+        if (tvReceivedLogMap != null) {
+            tvReceivedLogMap.setText(text);
+            if (svReceivedLogMap != null) svReceivedLogMap.post(() -> svReceivedLogMap.fullScroll(View.FOCUS_DOWN));
         }
     }
 
@@ -763,6 +804,7 @@ public class MainActivity extends AppCompatActivity {
         try { 
             outputStream.write(command.getBytes());
             Log.d(TAG, "Sent: " + command.trim());
+            appendReceivedLog("[SENT]: "+ command);
         }
         catch (IOException e) { Log.e(TAG, "Error sending", e); handleDisconnect(); }
     }

@@ -95,4 +95,28 @@
             android:textSize="11sp" />
     </ScrollView>
 
+    <TextView
+        android:id="@+id/textView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Sent/Received Log"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:id="@+id/svReceivedLog"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:layout_marginTop="4dp"
+        android:background="?attr/colorSurfaceVariant"
+        android:padding="4dp">
+
+        <TextView
+            android:id="@+id/tvReceivedLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textSize="11sp" />
+    </ScrollView>
+
 </LinearLayout>
