@@ -254,6 +254,7 @@ public class MainActivity extends AppCompatActivity {
         v.findViewById(R.id.btnSettings).setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
 
         renderRobotLog();
+        renderReceivedLog();
 
         lvAvailable.setAdapter(availableAdapter);
         lvPaired.setAdapter(pairedAdapter);
@@ -322,6 +323,7 @@ public class MainActivity extends AppCompatActivity {
         svReceivedLogMap = v.findViewById(R.id.svReceivedLog);
         tvLastDetectedMap = v.findViewById(R.id.tvLastDetected);
         renderRobotLog();
+        renderReceivedLog();
 
         v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid(mapGrid));
         v.findViewById(R.id.btnSendObstacles).setOnClickListener(view -> {
@@ -669,7 +671,42 @@ public class MainActivity extends AppCompatActivity {
                 while ((line = reader.readLine()) != null) {
                     final String received = line;
                     runOnUiThread(() -> {
-                        appendRobotLog(received);
+                        // robot update coordinates. Format: "ROBOT, <x>, <y>, <direction>"
+                        if(received.contains("ROBOT,")){
+                            try{
+                                String[] coordinates = received.split(",");
+                                double coordinateX = Double.parseDouble(coordinates[1]);
+                                double coordinateY = Double.parseDouble(coordinates[2]);
+                                String robotDirection = coordinates[3];
+
+                                // update map with new coords
+                                carXcm = coordinateX;
+                                carYcm = coordinateY;
+                                switch (robotDirection){
+                                    case "N":
+                                        carHeadingDeg = 0;
+                                    case "E":
+                                        carHeadingDeg = 90;
+                                        break;
+                                    case "S":
+                                        carHeadingDeg = 180;
+                                        break;
+                                    case "W":
+                                        carHeadingDeg = 270;
+                                        break;
+                                }
+                                updateMapOverlay();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error getting coordinates: "+e.getMessage());
+                            }
+
+                        }
+
+                        // remote update and status
+                        if(received.contains("[STATUS]")){
+                            appendRobotLog(received);
+                        }
+                        // any received input
                         appendReceivedLog("[RECEIVED]: "+received);
                     });
 
