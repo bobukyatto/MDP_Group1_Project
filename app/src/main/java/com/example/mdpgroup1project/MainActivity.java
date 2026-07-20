@@ -11,13 +11,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.provider.Settings;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.DragEvent;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -59,7 +62,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-public class MainActivity extends AppCompatActivity {
+public class
+MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     // Custom SPP UUID advertised by the Pi's "MDP-Server" service (nanocar_control_v5.py).
@@ -100,7 +104,12 @@ public class MainActivity extends AppCompatActivity {
     private final String[][] mapData = new String[20][20]; // Stores "OBSTACLE"
     private final float[][] mapRotation = new float[20][20];
     private final boolean[][] hasFace = new boolean[20][20];
+    private final int[][] obstacleId = new int[20][20]; // 0 = no obstacle; stable per-obstacle id, assigned once at placement
+    private final TextView[][] obstacleSymbolViews = new TextView[20][20];
     private final Map<String, Long> lastClickTimeMap = new HashMap<>();
+    private GridLayout mapGridRef;
+    private int nextObstacleId = 1;
+    private static final double MAX_SYMBOL_ATTACH_DISTANCE_CM = 40.0;
 
     private int obstacleCount = 0;
     private int currentX = 0;
@@ -113,8 +122,8 @@ public class MainActivity extends AppCompatActivity {
 
     private final Handler commandHandler = new Handler(Looper.getMainLooper());
 
-    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
-    private static final int WATCHDOG_INTERVAL = 2000;
+    private final Handler connectionPollHandler = new Handler(Looper.getMainLooper());
+    private static final long CONNECTION_POLL_INTERVAL_MS = 1000;
 
     private final Handler dragHandler = new Handler(Looper.getMainLooper());
     private static final long DRAG_HOLD_MS = 100; // short hold instead of the system long-press delay (~500ms)
@@ -204,6 +213,7 @@ public class MainActivity extends AppCompatActivity {
         registerReceiver(receiver, filter);
 
         commandHandler.post(commandRunnable);
+        connectionPollHandler.post(this::pollForTrustedDevice);
     }
 
     private class TabAdapter extends RecyclerView.Adapter<TabAdapter.ViewHolder> {
@@ -252,6 +262,7 @@ public class MainActivity extends AppCompatActivity {
         tvLastDetected = v.findViewById(R.id.tvLastDetected);
         v.findViewById(R.id.btnScan).setOnClickListener(view -> startDiscovery());
         v.findViewById(R.id.btnSettings).setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
+        v.findViewById(R.id.btnDisconnect).setOnClickListener(view -> disconnectDevice());
 
         renderRobotLog();
         renderReceivedLog();
@@ -314,6 +325,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupMapTab(View v) {
         GridLayout mapGrid = v.findViewById(R.id.mapGrid);
+        mapGridRef = mapGrid;
         ImageView imgDragObstacle = v.findViewById(R.id.imgDragObstacle);
         carOverlay = v.findViewById(R.id.imgCarOverlay);
         tvMapStatus = v.findViewById(R.id.tvMapStatus);
@@ -443,6 +455,7 @@ public class MainActivity extends AppCompatActivity {
                 mapData[r][c] = "OBSTACLE";
                 mapRotation[r][c] = 0;
                 hasFace[r][c] = false;
+                obstacleId[r][c] = nextObstacleId++;
                 obstacleCount++;
             } else {
                 Toast.makeText(this, "Max 6 obstacles reached", Toast.LENGTH_SHORT).show();
@@ -474,17 +487,31 @@ public class MainActivity extends AppCompatActivity {
             mapData[row][col] = type;
             mapRotation[row][col] = mapRotation[srcR][srcC];
             hasFace[row][col] = hasFace[srcR][srcC];
+            obstacleId[row][col] = obstacleId[srcR][srcC];
 
             mapData[srcR][srcC] = null;
             mapRotation[srcR][srcC] = 0;
             hasFace[srcR][srcC] = false;
+            obstacleId[srcR][srcC] = 0;
             ImageView srcCell = (ImageView) mapGrid.getChildAt(srcR * GRID_CELLS + srcC);
             if (srcCell != null) refreshCellUI(srcCell, srcR, srcC);
 
+            moveObstacleSymbol(srcR, srcC, row, col);
             refreshCellUI(destCell, row, col);
         } else {
             placeAt(destCell, row, col, type);
         }
+    }
+
+    private void moveObstacleSymbol(int srcR, int srcC, int destR, int destC) {
+        TextView tv = obstacleSymbolViews[srcR][srcC];
+        if (tv == null) return;
+        obstacleSymbolViews[srcR][srcC] = null;
+        obstacleSymbolViews[destR][destC] = tv;
+        GridLayout.LayoutParams params = (GridLayout.LayoutParams) tv.getLayoutParams();
+        params.rowSpec = GridLayout.spec(destR);
+        params.columnSpec = GridLayout.spec(destC);
+        tv.setLayoutParams(params);
     }
 
     private void handleCellTap(ImageView cell, int r, int c) {
@@ -496,8 +523,9 @@ public class MainActivity extends AppCompatActivity {
 
         if (now - last < 300) { // Double Tap to Remove
             if ("OBSTACLE".equals(mapData[r][c])) obstacleCount--;
-            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false; obstacleId[r][c] = 0;
             cell.setImageDrawable(null); cell.setRotation(0);
+            clearObstacleSymbol(r, c);
             return;
         }
 
@@ -526,11 +554,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void resetGrid(GridLayout grid) {
         for (int r = 0; r < GRID_CELLS; r++) for (int c = 0; c < GRID_CELLS; c++) {
-            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false; obstacleId[r][c] = 0;
             ImageView v = (ImageView) grid.getChildAt(r * GRID_CELLS + c);
             if (v != null) { v.setImageDrawable(null); v.setRotation(0); }
+            clearObstacleSymbol(r, c);
         }
-        obstacleCount = 0; lastClickTimeMap.clear();
+        obstacleCount = 0; lastClickTimeMap.clear(); nextObstacleId = 1;
 
         carXcm = START_X_CM; carYcm = START_Y_CM; carHeadingDeg = 0.0;
         updateMapOverlay();
@@ -538,16 +567,14 @@ public class MainActivity extends AppCompatActivity {
 
     private String buildObstacleMessage() {
         List<String> obsStrs = new ArrayList<>();
-        int id = 1;
         for (int r = 0; r < GRID_CELLS; r++) {
             for (int c = 0; c < GRID_CELLS; c++) {
                 if ("OBSTACLE".equals(mapData[r][c])) {
                     int xCm = c * CELL_SIZE_CM;
                     int yCm = (GRID_CELLS - 1 - r) * CELL_SIZE_CM;
-                    String entry = id + "," + xCm + "," + yCm;
+                    String entry = obstacleId[r][c] + "," + xCm + "," + yCm;
                     if (hasFace[r][c]) entry += "," + getFacing(mapRotation[r][c]);
                     obsStrs.add(entry);
-                    id++;
                 }
             }
         }
@@ -635,30 +662,74 @@ public class MainActivity extends AppCompatActivity {
         updateMapOverlay();
     }
 
-    private final Runnable watchdogRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) {
-                try {
-                    // Retry bluetooth connection to device
-                    Toast.makeText(MainActivity.this, "Retrying connection to device...", Toast.LENGTH_SHORT).show();
-                    bluetoothSocket.connect();
-                } catch (IOException e) {
-                    handleDisconnect();
-                }
-            }
-            else if (bluetoothSocket != null) watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
+    // Runs forever while the app is active: while connected, just re-checks periodically; while
+    // not connected, scans for nearby devices and, once the scan finishes, tries connecting to
+    // whichever discovered devices are also bonded ("trusted") - see ACTION_DISCOVERY_FINISHED.
+    @SuppressLint("MissingPermission")
+    private void pollForTrustedDevice() {
+        if (bluetoothSocket != null && bluetoothSocket.isConnected()) {
+            connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS);
+            return;
         }
-    };
+        if (bluetoothAdapter.isDiscovering()) {
+            // Already scanning (e.g. the user pressed Scan); let it finish and react to that instead.
+            connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS);
+            return;
+        }
+        availableDevices.clear(); availableDevicesNames.clear();
+        if (availableAdapter != null) availableAdapter.notifyDataSetChanged();
+        bluetoothAdapter.startDiscovery();
+    }
+
+    // Called once a scan finishes (whether it was started by pollForTrustedDevice or the
+    // manual Scan button) while not connected: reconnect to any discovered device that's bonded.
+    @SuppressLint("MissingPermission")
+    private void connectToAnyDiscoveredTrustedDevice() {
+        Set<BluetoothDevice> bonded = bluetoothAdapter.getBondedDevices();
+        List<BluetoothDevice> matches = new ArrayList<>();
+        for (BluetoothDevice discovered : availableDevices) {
+            for (BluetoothDevice paired : bonded) {
+                if (paired.getAddress().equals(discovered.getAddress())) { matches.add(paired); break; }
+            }
+        }
+        tryTrustedDevicesInOrder(matches, 0);
+    }
+
+    @SuppressLint("MissingPermission")
+    private void tryTrustedDevicesInOrder(List<BluetoothDevice> candidates, int index) {
+        if (index >= candidates.size()) {
+            // No trusted device found nearby (or all failed); wait, then scan again.
+            connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS);
+            return;
+        }
+        BluetoothDevice device = candidates.get(index);
+        Toast.makeText(this, "Found trusted device " + device.getName() + ", connecting...", Toast.LENGTH_SHORT).show();
+        doConnectAttempt(device,
+            () -> connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS),
+            () -> tryTrustedDevicesInOrder(candidates, index + 1));
+    }
 
     private void handleDisconnect() {
-        watchdogHandler.removeCallbacks(watchdogRunnable);
         try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
         bluetoothSocket = null; outputStream = null; inputStream = null; readThread = null;
         runOnUiThread(() -> {
             tvStatus.setText("Status: Disconnected"); tvStatus.setTextColor(Color.RED);
             appendRobotLog("--- disconnected ---");
         });
+        // Nudge the always-running poll loop to retry immediately instead of waiting for the next tick.
+        connectionPollHandler.removeCallbacksAndMessages(null);
+        connectionPollHandler.post(this::pollForTrustedDevice);
+    }
+
+    // Simulates a dropped link so the continuous poll loop is what notices and reacts,
+    // instead of shortcutting straight to a manual reconnect.
+    private void disconnectDevice() {
+        if (bluetoothSocket == null) {
+            Toast.makeText(this, "Not connected", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        appendRobotLog("--- manually disconnected (testing reconnect) ---");
+        handleDisconnect();
     }
 
     private void startReadThread() {
@@ -714,7 +785,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (IOException e) {
                 Log.w(TAG, "Read loop ended: " + e.getMessage());
             }
-            // Only clean up if this thread's connection is still the active one
+            // Only react if this thread's connection is still the active one
             // (a newer connection may have already replaced it, e.g. on reconnect).
             if (bluetoothSocket == socketForThisThread) handleDisconnect();
         });
@@ -751,6 +822,91 @@ public class MainActivity extends AppCompatActivity {
             String text = "Last Detected: " + detectedClass;
             if (tvLastDetected != null) tvLastDetected.setText(text);
             if (tvLastDetectedMap != null) tvLastDetectedMap.setText(text);
+            attachDetectedSymbolToNearestObstacle(detectedClass);
+        }
+    }
+
+    // detectedClass is formatted "NN_name" (e.g. "03_right") - NN is the target id.
+    private void attachDetectedSymbolToNearestObstacle(String detectedClass) {
+        int underscoreIdx = detectedClass.indexOf('_');
+        if (underscoreIdx <= 0) return;
+        int targetId;
+        try { targetId = Integer.parseInt(detectedClass.substring(0, underscoreIdx)); }
+        catch (NumberFormatException e) { return; }
+
+        String symbol = symbolForTargetId(targetId);
+        if (symbol == null) return; // unrecognized/unmapped id
+
+        int[] cell = findNearestFacedObstacle();
+        if (cell == null) return; // no obstacle with a face close enough to attribute this to
+        setObstacleSymbol(cell[0], cell[1], symbol);
+    }
+
+    private String symbolForTargetId(int id) {
+        switch (id) {
+            case 1: return "↑";  // up arrow
+            case 2: return "↓";  // down arrow
+            case 3: return "→";  // right arrow
+            case 4: return "←";  // left arrow
+            case 5: return "GO";      // green circle
+            case 6: return "6";
+            case 7: return "7";
+            case 8: return "8";
+            case 9: return "9";
+            case 10: return "0";
+            case 11: return "V";
+            case 12: return "W";
+            case 13: return "X";
+            case 14: return "Y";
+            default: return null;
+        }
+    }
+
+    // Finds the hasFace obstacle whose center is nearest the car's current estimated position,
+    // within MAX_SYMBOL_ATTACH_DISTANCE_CM - used to decide which obstacle a scan result belongs to.
+    private int[] findNearestFacedObstacle() {
+        int bestR = -1, bestC = -1;
+        double bestDist = Double.MAX_VALUE;
+        for (int r = 0; r < GRID_CELLS; r++) {
+            for (int c = 0; c < GRID_CELLS; c++) {
+                if (!"OBSTACLE".equals(mapData[r][c]) || !hasFace[r][c]) continue;
+                double obsX = c * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
+                double obsY = (GRID_CELLS - 1 - r) * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
+                double dist = Math.hypot(carXcm - obsX, carYcm - obsY);
+                if (dist < bestDist) { bestDist = dist; bestR = r; bestC = c; }
+            }
+        }
+        if (bestR < 0 || bestDist > MAX_SYMBOL_ATTACH_DISTANCE_CM) return null;
+        return new int[]{bestR, bestC};
+    }
+
+    private void setObstacleSymbol(int r, int c, String symbol) {
+        if (mapGridRef == null || mapGridPixelSize <= 0) return;
+        int cellSize = mapGridPixelSize / GRID_CELLS;
+        TextView tv = obstacleSymbolViews[r][c];
+        if (tv == null) {
+            tv = new TextView(this);
+            tv.setGravity(Gravity.CENTER);
+            tv.setTextColor(Color.BLACK);
+            tv.setTypeface(Typeface.DEFAULT_BOLD);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+            params.width = cellSize - 2; params.height = cellSize - 2;
+            params.rowSpec = GridLayout.spec(r);
+            params.columnSpec = GridLayout.spec(c);
+            params.setMargins(1, 1, 1, 1);
+            tv.setLayoutParams(params);
+            mapGridRef.addView(tv);
+            obstacleSymbolViews[r][c] = tv;
+        }
+        tv.setText(symbol);
+    }
+
+    private void clearObstacleSymbol(int r, int c) {
+        TextView tv = obstacleSymbolViews[r][c];
+        if (tv != null) {
+            if (mapGridRef != null) mapGridRef.removeView(tv);
+            obstacleSymbolViews[r][c] = null;
         }
     }
 
@@ -796,41 +952,84 @@ public class MainActivity extends AppCompatActivity {
 
     @SuppressLint("MissingPermission")
     private void connectToDevice(BluetoothDevice device) {
+        connectionPollHandler.removeCallbacksAndMessages(null);
+        doConnectAttempt(device,
+            () -> connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS),
+            () -> connectionPollHandler.postDelayed(this::pollForTrustedDevice, CONNECTION_POLL_INTERVAL_MS));
+    }
+
+    // Standard, well-known SPP UUID - many RFCOMM serial servers advertise under this instead of
+    // (or in addition to) a custom one, so it's worth trying if the custom UUID's SDP lookup fails.
+    private static final UUID DEFAULT_SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+
+    // Tries, in order: SDP lookup via the custom UUID, SDP lookup via the standard default SPP
+    // UUID, then finally a hardcoded RFCOMM channel 1 (bypassing SDP entirely). Runs on a
+    // background thread; calls onSuccess/onFailure once it settles on one outcome or the other.
+    @SuppressLint("MissingPermission")
+    private void doConnectAttempt(BluetoothDevice device, Runnable onSuccess, Runnable onFailure) {
         new Thread(() -> {
-            try {
-                if (bluetoothSocket != null) { try { bluetoothSocket.close(); } catch (IOException ignored) {} bluetoothSocket = null; }
-                bluetoothAdapter.cancelDiscovery();
-                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-                bluetoothSocket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                bluetoothSocket.connect();
-                outputStream = bluetoothSocket.getOutputStream();
-                inputStream = bluetoothSocket.getInputStream();
-                startReadThread();
-                runOnUiThread(() -> {
-                    tvStatus.setText("Status: Connected to " + device.getName());
-                    tvStatus.setTextColor(Color.GREEN);
-                    watchdogHandler.post(watchdogRunnable);
-                    appendRobotLog("--- connected to " + device.getName() + " ---");
-                });
-            } catch (IOException e) {
-                try {
-                    bluetoothSocket = (BluetoothSocket) device.getClass().getMethod("createRfcommSocket", new Class[]{int.class}).invoke(device, 1);
-                    bluetoothSocket.connect();
-                    outputStream = bluetoothSocket.getOutputStream();
-                    inputStream = bluetoothSocket.getInputStream();
-                    startReadThread();
-                    runOnUiThread(() -> {
-                        tvStatus.setText("Status: Connected (Alt) to " + device.getName());
-                        tvStatus.setTextColor(Color.GREEN);
-                        watchdogHandler.post(watchdogRunnable);
-                        appendRobotLog("--- connected (alt) to " + device.getName() + " ---");
-                    });
-                } catch (Exception e2) {
-                    handleDisconnect();
-                    runOnUiThread(() -> { tvStatus.setText("Status: Connection Failed"); tvStatus.setTextColor(Color.RED); });
-                }
+            if (tryConnectViaUuid(device, SPP_UUID)) {
+                reportConnected(device, "Connected to " + device.getName());
+                onSuccess.run();
+                return;
             }
+            if (tryConnectViaUuid(device, DEFAULT_SPP_UUID)) {
+                reportConnected(device, "Connected (default SPP) to " + device.getName());
+                onSuccess.run();
+                return;
+            }
+            if (tryConnectViaChannel(device, 1)) {
+                reportConnected(device, "Connected (channel 1) to " + device.getName());
+                onSuccess.run();
+                return;
+            }
+            try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
+            bluetoothSocket = null; outputStream = null; inputStream = null; readThread = null;
+            runOnUiThread(() -> { tvStatus.setText("Status: Connection Failed"); tvStatus.setTextColor(Color.RED); });
+            onFailure.run();
         }).start();
+    }
+
+    @SuppressLint("MissingPermission")
+    private boolean tryConnectViaUuid(BluetoothDevice device, UUID uuid) {
+        try {
+            if (bluetoothSocket != null) { try { bluetoothSocket.close(); } catch (IOException ignored) {} bluetoothSocket = null; }
+            bluetoothAdapter.cancelDiscovery();
+            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+            bluetoothSocket = device.createRfcommSocketToServiceRecord(uuid);
+            bluetoothSocket.connect();
+            outputStream = bluetoothSocket.getOutputStream();
+            inputStream = bluetoothSocket.getInputStream();
+            startReadThread();
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private boolean tryConnectViaChannel(BluetoothDevice device, int channel) {
+        try {
+            if (bluetoothSocket != null) { try { bluetoothSocket.close(); } catch (IOException ignored) {} bluetoothSocket = null; }
+            bluetoothAdapter.cancelDiscovery();
+            bluetoothSocket = (BluetoothSocket) device.getClass()
+                .getMethod("createRfcommSocket", new Class[]{int.class}).invoke(device, channel);
+            bluetoothSocket.connect();
+            outputStream = bluetoothSocket.getOutputStream();
+            inputStream = bluetoothSocket.getInputStream();
+            startReadThread();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void reportConnected(BluetoothDevice device, String statusText) {
+        runOnUiThread(() -> {
+            tvStatus.setText("Status: " + statusText);
+            tvStatus.setTextColor(Color.GREEN);
+            appendRobotLog("--- " + statusText + " ---");
+        });
     }
 
     private void sendCommand(String command) {
@@ -861,6 +1060,7 @@ public class MainActivity extends AppCompatActivity {
             } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
                 if (bluetoothSocket == null || !bluetoothSocket.isConnected()) {
                     tvStatus.setText("Status: Disconnected"); tvStatus.setTextColor(Color.RED);
+                    connectToAnyDiscoveredTrustedDevice();
                 }
             } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
                 if (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1) == BluetoothDevice.BOND_BONDED) updatePairedDevices();
