@@ -30,6 +30,14 @@
             android:text="Position: (15.0, 15.0) cm   Heading: 0°  [estimated]"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/btnTogglePositionSource"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Position Source: Telemetry (tap for Estimate)"
+            android:textAllCaps="false" />
+
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -44,6 +52,11 @@
                 android:alignmentMode="alignMargins"
                 android:columnCount="20"
                 android:rowCount="20" />
+
+            <com.example.mdpgroup1project.PathOverlayView
+                android:id="@+id/pathOverlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
 
             <ImageView
                 android:id="@+id/imgCarOverlay"
@@ -177,6 +190,13 @@
                     android:layout_height="wrap_content"
                     android:layout_margin="8dp"
                     android:text="MANUAL" />
+
+                <Button
+                    android:id="@+id/btnNavigate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_margin="8dp"
+                    android:text="NAVIGATE" />
 
                 <Button
                     android:id="@+id/btnFindTarget"

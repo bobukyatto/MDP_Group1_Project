@@ -11,13 +11,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.provider.Settings;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.DragEvent;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -26,7 +29,9 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.GridLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -100,7 +105,23 @@ public class MainActivity extends AppCompatActivity {
     private final String[][] mapData = new String[20][20]; // Stores "OBSTACLE"
     private final float[][] mapRotation = new float[20][20];
     private final boolean[][] hasFace = new boolean[20][20];
+    private final int[][] obstacleId = new int[20][20]; // 0 = no obstacle; stable per-obstacle id, assigned once at placement
+    private final TextView[][] obstacleSymbolViews = new TextView[20][20];
     private final Map<String, Long> lastClickTimeMap = new HashMap<>();
+    private GridLayout mapGridRef;
+    private int nextObstacleId = 1;
+    private static final double MAX_SYMBOL_ATTACH_DISTANCE_CM = 40.0;
+
+    // Manual tab: one block per placed obstacle, keyed by stable obstacle id.
+    private LinearLayout obstacleBlocksContainer;
+    private final Map<Integer, View> obstacleBlockRootViews = new HashMap<>();
+    private final Map<Integer, TextView> obstacleBlockSymbolViews = new HashMap<>();
+    private int selectedObstacleId = -1; // which obstacle a manual scan result should attach to
+
+    // Map tab: whether the car icon follows real telemetry (ROBOT,<x>,<y>,<dir> lines) or local
+    // dead-reckoning estimation. Toggled via a button on the Map tab.
+    private boolean useEstimatedPosition = false;
+    private Button btnPositionSource;
 
     private int obstacleCount = 0;
     private int currentX = 0;
@@ -112,9 +133,6 @@ public class MainActivity extends AppCompatActivity {
     private boolean isSwapped = false;
 
     private final Handler commandHandler = new Handler(Looper.getMainLooper());
-
-    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
-    private static final int WATCHDOG_INTERVAL = 2000;
 
     private final Handler dragHandler = new Handler(Looper.getMainLooper());
     private static final long DRAG_HOLD_MS = 100; // short hold instead of the system long-press delay (~500ms)
@@ -149,9 +167,12 @@ public class MainActivity extends AppCompatActivity {
     private static final float ICON_FRONT_OFFSET_DEG = 180f;
 
     private ImageView carOverlay;
+    private PathOverlayView pathOverlayView;
     private TextView tvMapStatus;
     private int mapGridPixelSize = 0;
     private int carIconSizePx = 0;
+
+    private JoystickView manualJoyL, manualJoyR, mapJoyL, mapJoyR;
 
     @SuppressLint("MissingPermission")
     @Override
@@ -314,8 +335,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupMapTab(View v) {
         GridLayout mapGrid = v.findViewById(R.id.mapGrid);
+        mapGridRef = mapGrid;
         ImageView imgDragObstacle = v.findViewById(R.id.imgDragObstacle);
         carOverlay = v.findViewById(R.id.imgCarOverlay);
+        pathOverlayView = v.findViewById(R.id.pathOverlay);
         tvMapStatus = v.findViewById(R.id.tvMapStatus);
         tvRobotLogMap = v.findViewById(R.id.tvRobotLog);
         svRobotLogMap = v.findViewById(R.id.svRobotLog);
@@ -325,12 +348,18 @@ public class MainActivity extends AppCompatActivity {
         renderRobotLog();
         renderReceivedLog();
 
-        v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid(mapGrid));
-        v.findViewById(R.id.btnSendObstacles).setOnClickListener(view -> {
-            String msg = buildObstacleMessage();
-            if (msg == null) { Toast.makeText(this, "No obstacles placed", Toast.LENGTH_SHORT).show(); return; }
-            sendCommand(msg);
+        btnPositionSource = v.findViewById(R.id.btnTogglePositionSource);
+        updatePositionSourceLabel();
+        btnPositionSource.setOnClickListener(view -> {
+            useEstimatedPosition = !useEstimatedPosition;
+            updatePositionSourceLabel();
+            updateMapOverlay();
         });
+
+        setupCarControls(v, true);
+
+        v.findViewById(R.id.btnResetGrid).setOnClickListener(view -> resetGrid(mapGrid));
+        v.findViewById(R.id.btnSendObstacles).setOnClickListener(view -> sendCommand(buildObstacleMessage()));
 
         imgDragObstacle.setOnTouchListener((view, event) -> handlePaletteTouch(view, event, "OBSTACLE"));
 
@@ -367,6 +396,7 @@ public class MainActivity extends AppCompatActivity {
             carParams.width = cellSize; carParams.height = cellSize;
             carOverlay.setLayoutParams(carParams);
             carIconSizePx = cellSize;
+            if (pathOverlayView != null) pathOverlayView.setGridMetrics(mapGridPixelSize, ARENA_SIZE_CM);
             updateMapOverlay();
         });
     }
@@ -385,9 +415,17 @@ public class MainActivity extends AppCompatActivity {
 
         if (tvMapStatus != null) {
             double headingNorm = ((carHeadingDeg % 360) + 360) % 360;
+            String source = useEstimatedPosition ? "estimated" : "telemetry";
             tvMapStatus.setText(String.format(Locale.US,
-                "Position: (%.1f, %.1f) cm   Heading: %.0f°  [estimated]", carXcm, carYcm, headingNorm));
+                "Position: (%.1f, %.1f) cm   Heading: %.0f°  [%s]", carXcm, carYcm, headingNorm, source));
         }
+    }
+
+    private void updatePositionSourceLabel() {
+        if (btnPositionSource == null) return;
+        btnPositionSource.setText(useEstimatedPosition
+            ? "Position Source: Estimate (tap for Telemetry)"
+            : "Position Source: Telemetry (tap for Estimate)");
     }
 
     // Obstacle drag to map function
@@ -443,7 +481,9 @@ public class MainActivity extends AppCompatActivity {
                 mapData[r][c] = "OBSTACLE";
                 mapRotation[r][c] = 0;
                 hasFace[r][c] = false;
+                obstacleId[r][c] = nextObstacleId++;
                 obstacleCount++;
+                addObstacleBlock(obstacleId[r][c]);
             } else {
                 Toast.makeText(this, "Max 6 obstacles reached", Toast.LENGTH_SHORT).show();
             }
@@ -474,17 +514,31 @@ public class MainActivity extends AppCompatActivity {
             mapData[row][col] = type;
             mapRotation[row][col] = mapRotation[srcR][srcC];
             hasFace[row][col] = hasFace[srcR][srcC];
+            obstacleId[row][col] = obstacleId[srcR][srcC];
 
             mapData[srcR][srcC] = null;
             mapRotation[srcR][srcC] = 0;
             hasFace[srcR][srcC] = false;
+            obstacleId[srcR][srcC] = 0;
             ImageView srcCell = (ImageView) mapGrid.getChildAt(srcR * GRID_CELLS + srcC);
             if (srcCell != null) refreshCellUI(srcCell, srcR, srcC);
 
+            moveObstacleSymbol(srcR, srcC, row, col);
             refreshCellUI(destCell, row, col);
         } else {
             placeAt(destCell, row, col, type);
         }
+    }
+
+    private void moveObstacleSymbol(int srcR, int srcC, int destR, int destC) {
+        TextView tv = obstacleSymbolViews[srcR][srcC];
+        if (tv == null) return;
+        obstacleSymbolViews[srcR][srcC] = null;
+        obstacleSymbolViews[destR][destC] = tv;
+        GridLayout.LayoutParams params = (GridLayout.LayoutParams) tv.getLayoutParams();
+        params.rowSpec = GridLayout.spec(destR);
+        params.columnSpec = GridLayout.spec(destC);
+        tv.setLayoutParams(params);
     }
 
     private void handleCellTap(ImageView cell, int r, int c) {
@@ -495,9 +549,13 @@ public class MainActivity extends AppCompatActivity {
         lastClickTimeMap.put(key, now);
 
         if (now - last < 300) { // Double Tap to Remove
-            if ("OBSTACLE".equals(mapData[r][c])) obstacleCount--;
-            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            if ("OBSTACLE".equals(mapData[r][c])) {
+                obstacleCount--;
+                removeObstacleBlock(obstacleId[r][c]);
+            }
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false; obstacleId[r][c] = 0;
             cell.setImageDrawable(null); cell.setRotation(0);
+            clearObstacleSymbol(r, c);
             return;
         }
 
@@ -526,32 +584,40 @@ public class MainActivity extends AppCompatActivity {
 
     private void resetGrid(GridLayout grid) {
         for (int r = 0; r < GRID_CELLS; r++) for (int c = 0; c < GRID_CELLS; c++) {
-            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false;
+            mapData[r][c] = null; mapRotation[r][c] = 0; hasFace[r][c] = false; obstacleId[r][c] = 0;
             ImageView v = (ImageView) grid.getChildAt(r * GRID_CELLS + c);
             if (v != null) { v.setImageDrawable(null); v.setRotation(0); }
+            clearObstacleSymbol(r, c);
         }
-        obstacleCount = 0; lastClickTimeMap.clear();
+        obstacleCount = 0; lastClickTimeMap.clear(); nextObstacleId = 1;
+        clearAllObstacleBlocks();
+        if (pathOverlayView != null) pathOverlayView.clearPath();
 
         carXcm = START_X_CM; carYcm = START_Y_CM; carHeadingDeg = 0.0;
         updateMapOverlay();
     }
 
+    // Pi's route_executor.set_obstacles() expects raw grid column/row (0-19), NOT centimeters -
+    // do not multiply by CELL_SIZE_CM here; that was a real bug (values like 150 are out of the
+    // valid 0-19 range and would fail Pass 2 validation on the Pi side).
     private String buildObstacleMessage() {
         List<String> obsStrs = new ArrayList<>();
-        int id = 1;
         for (int r = 0; r < GRID_CELLS; r++) {
             for (int c = 0; c < GRID_CELLS; c++) {
                 if ("OBSTACLE".equals(mapData[r][c])) {
-                    int xCm = c * CELL_SIZE_CM;
-                    int yCm = (GRID_CELLS - 1 - r) * CELL_SIZE_CM;
-                    String entry = id + "," + xCm + "," + yCm;
+                    int col = c;
+                    int row = GRID_CELLS - 1 - r;
+                    String entry = obstacleId[r][c] + "," + col + "," + row;
                     if (hasFace[r][c]) entry += "," + getFacing(mapRotation[r][c]);
                     obsStrs.add(entry);
-                    id++;
                 }
             }
         }
-        if (obsStrs.isEmpty()) return null;
+        // Fixed start zone center cell, in the Pi's own column/row convention (bottom-left origin).
+        int startCol = 1;
+        int startRow = GRID_CELLS - 1 - (START_ZONE_ROW_MIN + 1);
+        obsStrs.add("R," + startCol + "," + startRow + ",N");
+
         StringBuilder sb = new StringBuilder("OBS:");
         for (int i = 0; i < obsStrs.size(); i++) {
             if (i > 0) sb.append(";");
@@ -567,15 +633,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setupManualTab(View v) {
+        obstacleBlocksContainer = v.findViewById(R.id.obstacleBlocksContainer);
+        // Defensive: re-sync in case obstacles were placed before this tab finished binding.
+        for (int r = 0; r < GRID_CELLS; r++) {
+            for (int c = 0; c < GRID_CELLS; c++) {
+                if ("OBSTACLE".equals(mapData[r][c]) && obstacleId[r][c] > 0) addObstacleBlock(obstacleId[r][c]);
+            }
+        }
+        setupCarControls(v, false);
+    }
+
+    // Shared by both the Manual tab and the Map tab, which have identical joystick/button
+    // layouts - driving from either tab controls the same underlying car state.
+    private void setupCarControls(View v, boolean isMapTab) {
         JoystickView joyL = v.findViewById(R.id.joystickLeft);
         JoystickView joyR = v.findViewById(R.id.joystickRight);
+        if (isMapTab) { mapJoyL = joyL; mapJoyR = joyR; } else { manualJoyL = joyL; manualJoyR = joyR; }
         updateJoystickRoles(joyL, joyR);
-        v.findViewById(R.id.btnSwap).setOnClickListener(view -> { isSwapped = !isSwapped; updateJoystickRoles(joyL, joyR); });
+        v.findViewById(R.id.btnSwap).setOnClickListener(view -> { isSwapped = !isSwapped; refreshAllJoystickRoles(); });
         v.findViewById(R.id.btnStop).setOnClickListener(view -> { currentX = 0; currentZ = 0; sendCommand("stop\n"); });
         v.findViewById(R.id.btnManualAuto).setOnClickListener(view -> sendCommand("auto\n"));
         v.findViewById(R.id.btnManualStart).setOnClickListener(view -> sendCommand("manual\n"));
+        v.findViewById(R.id.btnNavigate).setOnClickListener(view -> sendCommand("navigate\n"));
         v.findViewById(R.id.btnFindTarget).setOnClickListener(view -> sendCommand("find\n"));
         v.findViewById(R.id.btnScanImage).setOnClickListener(view -> sendCommand("recognise\n"));
+    }
+
+    private void refreshAllJoystickRoles() {
+        if (manualJoyL != null && manualJoyR != null) updateJoystickRoles(manualJoyL, manualJoyR);
+        if (mapJoyL != null && mapJoyR != null) updateJoystickRoles(mapJoyL, mapJoyR);
     }
 
     private void updateJoystickRoles(JoystickView left, JoystickView right) {
@@ -605,13 +691,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static final long COMMAND_INTERVAL_MS = 50;
+    // Resend even when unchanged at least this often, so the link never goes
+    // fully silent (an idle Bluetooth link with zero traffic for long enough
+    // has been observed to time out and disconnect - "Connection timed out").
+    private static final long KEEP_ALIVE_INTERVAL_MS = 1000;
+    private long lastSendTimeMs = 0;
 
     private final Runnable commandRunnable = new Runnable() {
         @Override
         public void run() {
-            if (currentX != lastSentX || currentZ != lastSentZ) {
+            long now = System.currentTimeMillis();
+            boolean changed = currentX != lastSentX || currentZ != lastSentZ;
+            boolean keepAliveDue = now - lastSendTimeMs >= KEEP_ALIVE_INTERVAL_MS;
+            if (changed || keepAliveDue) {
                 sendCommand(currentX + "," + currentZ + "\n");
                 lastSentX = currentX; lastSentZ = currentZ;
+                lastSendTimeMs = now;
             }
             updateDeadReckoning(COMMAND_INTERVAL_MS / 1000.0);
             commandHandler.postDelayed(this, COMMAND_INTERVAL_MS);
@@ -619,6 +714,7 @@ public class MainActivity extends AppCompatActivity {
     };
 
     private void updateDeadReckoning(double dtSec) {
+        if (!useEstimatedPosition) return; // telemetry mode: position/heading only come from ROBOT, lines
         if (currentX == 0 && currentZ == 0) return;
 
         double headingRateDegPerSec = CALIB_DEG_PER_SEC
@@ -635,24 +731,7 @@ public class MainActivity extends AppCompatActivity {
         updateMapOverlay();
     }
 
-    private final Runnable watchdogRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (bluetoothSocket != null && !bluetoothSocket.isConnected()) {
-                try {
-                    // Retry bluetooth connection to device
-                    Toast.makeText(MainActivity.this, "Retrying connection to device...", Toast.LENGTH_SHORT).show();
-                    bluetoothSocket.connect();
-                } catch (IOException e) {
-                    handleDisconnect();
-                }
-            }
-            else if (bluetoothSocket != null) watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL);
-        }
-    };
-
     private void handleDisconnect() {
-        watchdogHandler.removeCallbacks(watchdogRunnable);
         try { if (bluetoothSocket != null) bluetoothSocket.close(); } catch (IOException ignored) {}
         bluetoothSocket = null; outputStream = null; inputStream = null; readThread = null;
         runOnUiThread(() -> {
@@ -671,20 +750,21 @@ public class MainActivity extends AppCompatActivity {
                 while ((line = reader.readLine()) != null) {
                     final String received = line;
                     runOnUiThread(() -> {
-                        // robot update coordinates. Format: "ROBOT, <x>, <y>, <direction>"
-                        if(received.contains("ROBOT,")){
+                        // Robot pose update. Format: "ROBOT,<col>,<row>,<facing>" - col/row are grid
+                        // indices (0-19, bottom-left origin), NOT centimeters; convert to the cell center.
+                        if(received.startsWith("ROBOT,") && !useEstimatedPosition){
                             try{
                                 String[] coordinates = received.split(",");
-                                double coordinateX = Double.parseDouble(coordinates[1]);
-                                double coordinateY = Double.parseDouble(coordinates[2]);
-                                String robotDirection = coordinates[3];
+                                double col = Double.parseDouble(coordinates[1].trim());
+                                double row = Double.parseDouble(coordinates[2].trim());
+                                String robotDirection = coordinates[3].trim();
 
-                                // update map with new coords
-                                carXcm = coordinateX;
-                                carYcm = coordinateY;
+                                carXcm = col * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
+                                carYcm = row * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
                                 switch (robotDirection){
                                     case "N":
                                         carHeadingDeg = 0;
+                                        break;
                                     case "E":
                                         carHeadingDeg = 90;
                                         break;
@@ -699,7 +779,34 @@ public class MainActivity extends AppCompatActivity {
                             } catch (Exception e) {
                                 Log.e(TAG, "Error getting coordinates: "+e.getMessage());
                             }
+                        }
 
+                        // Authoritative per-obstacle detection result. Format: "TARGET,<obstacle_id>,<target_id>"
+                        // obstacle_id is -1 for an ad-hoc single-shot recognise (not tied to a placed obstacle);
+                        // target_id is -1 if nothing was recognized.
+                        if (received.startsWith("TARGET,")) {
+                            try {
+                                String[] parts = received.substring("TARGET,".length()).split(",");
+                                int obsIdFromMsg = Integer.parseInt(parts[0].trim());
+                                int targetId = Integer.parseInt(parts[1].trim());
+                                handleTargetResult(obsIdFromMsg, targetId);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error parsing TARGET: " + e.getMessage());
+                            }
+                        }
+
+                        // Planned route polyline. Format: "PATH,x1:y1;x2:y2;..." (integer cm points).
+                        if (received.startsWith("PATH,")) {
+                            try {
+                                List<float[]> pts = new ArrayList<>();
+                                for (String tok : received.substring("PATH,".length()).split(";")) {
+                                    String[] xy = tok.split(":");
+                                    pts.add(new float[]{Float.parseFloat(xy[0].trim()), Float.parseFloat(xy[1].trim())});
+                                }
+                                if (pathOverlayView != null) pathOverlayView.setPathPoints(pts);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error parsing PATH: " + e.getMessage());
+                            }
                         }
 
                         // remote update and status
@@ -751,6 +858,198 @@ public class MainActivity extends AppCompatActivity {
             String text = "Last Detected: " + detectedClass;
             if (tvLastDetected != null) tvLastDetected.setText(text);
             if (tvLastDetectedMap != null) tvLastDetectedMap.setText(text);
+            attachDetectedSymbolToNearestObstacle(detectedClass);
+        }
+    }
+
+    // Authoritative per-obstacle result from "TARGET,<obstacle_id>,<target_id>". obstacle_id is -1
+    // for a manual (operator-triggered) recognise/scan, since the Pi can't know which placed
+    // obstacle the car happens to be in front of in that case - so we fall back to whichever
+    // obstacle the operator has manually selected via its block on the Manual tab.
+    private void handleTargetResult(int obsIdFromMsg, int targetId) {
+        int effectiveObsId = obsIdFromMsg > 0 ? obsIdFromMsg : selectedObstacleId;
+        String symbol = targetId > 0 ? symbolForTargetId(targetId) : null;
+
+        if (effectiveObsId > 0 && symbol != null) {
+            int[] cell = findObstacleCellById(effectiveObsId);
+            if (cell != null) {
+                setObstacleSymbol(cell[0], cell[1], symbol);
+                updateObstacleBlockSymbol(effectiveObsId, symbol);
+            }
+        }
+
+        String text = symbol != null
+            ? "Last Detected: " + (effectiveObsId > 0 ? ("Obstacle " + effectiveObsId + " -> ") : "") + symbol
+            : "Last Detected: none";
+        if (tvLastDetected != null) tvLastDetected.setText(text);
+        if (tvLastDetectedMap != null) tvLastDetectedMap.setText(text);
+
+        // Manual scans are one-shot: clear the selection once this attempt resolves (success or not)
+        // so the operator has to deliberately re-select before the next scan.
+        if (obsIdFromMsg <= 0 && selectedObstacleId > 0) selectObstacle(selectedObstacleId);
+    }
+
+    private int[] findObstacleCellById(int id) {
+        for (int r = 0; r < GRID_CELLS; r++) {
+            for (int c = 0; c < GRID_CELLS; c++) {
+                if (obstacleId[r][c] == id) return new int[]{r, c};
+            }
+        }
+        return null;
+    }
+
+    // detectedClass is formatted "NN_name" (e.g. "03_right") - NN is the target id.
+    private void attachDetectedSymbolToNearestObstacle(String detectedClass) {
+        int underscoreIdx = detectedClass.indexOf('_');
+        if (underscoreIdx <= 0) return;
+        int targetId;
+        try { targetId = Integer.parseInt(detectedClass.substring(0, underscoreIdx)); }
+        catch (NumberFormatException e) { return; }
+
+        String symbol = symbolForTargetId(targetId);
+        if (symbol == null) return; // unrecognized/unmapped id
+
+        int[] cell = findNearestFacedObstacle();
+        if (cell == null) return; // no obstacle with a face close enough to attribute this to
+        setObstacleSymbol(cell[0], cell[1], symbol);
+        updateObstacleBlockSymbol(obstacleId[cell[0]][cell[1]], symbol);
+    }
+
+    private String symbolForTargetId(int id) {
+        switch (id) {
+            case 1: return "↑";  // up arrow
+            case 2: return "↓";  // down arrow
+            case 3: return "→";  // right arrow
+            case 4: return "←";  // left arrow
+            case 5: return "GO";      // green circle
+            case 6: return "6";
+            case 7: return "7";
+            case 8: return "8";
+            case 9: return "9";
+            case 10: return "0";
+            case 11: return "V";
+            case 12: return "W";
+            case 13: return "X";
+            case 14: return "Y";
+            default: return null;
+        }
+    }
+
+    // Finds the hasFace obstacle whose center is nearest the car's current estimated position,
+    // within MAX_SYMBOL_ATTACH_DISTANCE_CM - used to decide which obstacle a scan result belongs to.
+    private int[] findNearestFacedObstacle() {
+        int bestR = -1, bestC = -1;
+        double bestDist = Double.MAX_VALUE;
+        for (int r = 0; r < GRID_CELLS; r++) {
+            for (int c = 0; c < GRID_CELLS; c++) {
+                if (!"OBSTACLE".equals(mapData[r][c]) || !hasFace[r][c]) continue;
+                double obsX = c * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
+                double obsY = (GRID_CELLS - 1 - r) * CELL_SIZE_CM + CELL_SIZE_CM / 2.0;
+                double dist = Math.hypot(carXcm - obsX, carYcm - obsY);
+                if (dist < bestDist) { bestDist = dist; bestR = r; bestC = c; }
+            }
+        }
+        if (bestR < 0 || bestDist > MAX_SYMBOL_ATTACH_DISTANCE_CM) return null;
+        return new int[]{bestR, bestC};
+    }
+
+    private void setObstacleSymbol(int r, int c, String symbol) {
+        if (mapGridRef == null || mapGridPixelSize <= 0) return;
+        int cellSize = mapGridPixelSize / GRID_CELLS;
+        TextView tv = obstacleSymbolViews[r][c];
+        if (tv == null) {
+            tv = new TextView(this);
+            tv.setGravity(Gravity.CENTER);
+            tv.setTextColor(Color.BLACK);
+            tv.setTypeface(Typeface.DEFAULT_BOLD);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+            params.width = cellSize - 2; params.height = cellSize - 2;
+            params.rowSpec = GridLayout.spec(r);
+            params.columnSpec = GridLayout.spec(c);
+            params.setMargins(1, 1, 1, 1);
+            tv.setLayoutParams(params);
+            mapGridRef.addView(tv);
+            obstacleSymbolViews[r][c] = tv;
+        }
+        tv.setText(symbol);
+    }
+
+    private void clearObstacleSymbol(int r, int c) {
+        TextView tv = obstacleSymbolViews[r][c];
+        if (tv != null) {
+            if (mapGridRef != null) mapGridRef.removeView(tv);
+            obstacleSymbolViews[r][c] = null;
+        }
+    }
+
+    // --- Manual tab: per-obstacle blocks, keyed by stable obstacle id ---
+
+    private void addObstacleBlock(int id) {
+        if (obstacleBlocksContainer == null || obstacleBlockRootViews.containsKey(id)) return;
+        float density = getResources().getDisplayMetrics().density;
+        int paddingPx = (int) (8 * density);
+        int marginPx = (int) (4 * density);
+
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setGravity(Gravity.CENTER);
+        block.setBackgroundColor(Color.LTGRAY);
+        block.setPadding(paddingPx, paddingPx, paddingPx, paddingPx);
+        LinearLayout.LayoutParams blockParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        blockParams.setMargins(marginPx, marginPx, marginPx, marginPx);
+        block.setLayoutParams(blockParams);
+
+        TextView tvId = new TextView(this);
+        tvId.setText("Obstacle " + id);
+        tvId.setTextSize(10);
+        tvId.setGravity(Gravity.CENTER);
+
+        TextView tvSymbol = new TextView(this);
+        tvSymbol.setText("?");
+        tvSymbol.setTextSize(20);
+        tvSymbol.setTypeface(Typeface.DEFAULT_BOLD);
+        tvSymbol.setGravity(Gravity.CENTER);
+
+        block.addView(tvId);
+        block.addView(tvSymbol);
+        block.setOnClickListener(view -> selectObstacle(id));
+        obstacleBlocksContainer.addView(block);
+
+        obstacleBlockRootViews.put(id, block);
+        obstacleBlockSymbolViews.put(id, tvSymbol);
+    }
+
+    private void removeObstacleBlock(int id) {
+        View block = obstacleBlockRootViews.remove(id);
+        obstacleBlockSymbolViews.remove(id);
+        if (block != null && obstacleBlocksContainer != null) obstacleBlocksContainer.removeView(block);
+        if (selectedObstacleId == id) selectedObstacleId = -1;
+    }
+
+    private void updateObstacleBlockSymbol(int id, String symbol) {
+        TextView tv = obstacleBlockSymbolViews.get(id);
+        if (tv != null) tv.setText(symbol);
+    }
+
+    private void clearAllObstacleBlocks() {
+        if (obstacleBlocksContainer != null) obstacleBlocksContainer.removeAllViews();
+        obstacleBlockRootViews.clear();
+        obstacleBlockSymbolViews.clear();
+        selectedObstacleId = -1;
+    }
+
+    // Tap an obstacle block to mark it as the target for the next manual scan/recognise result
+    // (tap again to deselect). Needed because a manual TARGET,-1,<id> doesn't say which obstacle it's for.
+    private void selectObstacle(int id) {
+        selectedObstacleId = (selectedObstacleId == id) ? -1 : id;
+        for (Map.Entry<Integer, View> entry : obstacleBlockRootViews.entrySet()) {
+            entry.getValue().setBackgroundColor(
+                entry.getKey() == selectedObstacleId ? Color.parseColor("#FFB74D") : Color.LTGRAY);
+        }
+        if (selectedObstacleId > 0) {
+            Toast.makeText(this, "Obstacle " + selectedObstacleId + " selected for next scan", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -809,7 +1108,6 @@ public class MainActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     tvStatus.setText("Status: Connected to " + device.getName());
                     tvStatus.setTextColor(Color.GREEN);
-                    watchdogHandler.post(watchdogRunnable);
                     appendRobotLog("--- connected to " + device.getName() + " ---");
                 });
             } catch (IOException e) {
@@ -822,7 +1120,6 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         tvStatus.setText("Status: Connected (Alt) to " + device.getName());
                         tvStatus.setTextColor(Color.GREEN);
-                        watchdogHandler.post(watchdogRunnable);
                         appendRobotLog("--- connected (alt) to " + device.getName() + " ---");
                     });
                 } catch (Exception e2) {
